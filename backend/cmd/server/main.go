@@ -5,16 +5,32 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/fslongjin/liteboxd/internal/handler"
 	"github.com/fslongjin/liteboxd/internal/k8s"
 	"github.com/fslongjin/liteboxd/internal/service"
+	"github.com/fslongjin/liteboxd/internal/store"
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 )
 
 func main() {
+	// Initialize SQLite database
+	dataDir := os.Getenv("DATA_DIR")
+	if dataDir == "" {
+		dataDir = "./data"
+	}
+	dbPath := filepath.Join(dataDir, "liteboxd.db")
+
+	fmt.Printf("Initializing database at %s\n", dbPath)
+	if err := store.InitDB(dbPath); err != nil {
+		log.Fatalf("Failed to initialize database: %v", err)
+	}
+	defer store.CloseDB()
+	fmt.Println("Database initialized")
+
 	kubeconfigPath := os.Getenv("KUBECONFIG")
 	if kubeconfigPath == "" {
 		home := os.Getenv("HOME")
@@ -32,11 +48,34 @@ func main() {
 	}
 	fmt.Println("Namespace 'liteboxd' ensured")
 
+	// Create services
+	templateSvc := service.NewTemplateService()
+	prepullSvc := service.NewPrepullService(k8sClient)
+	importExportSvc := service.NewImportExportService(templateSvc, prepullSvc)
 	sandboxSvc := service.NewSandboxService(k8sClient)
+	sandboxSvc.SetTemplateService(templateSvc)
+	templateSvc.SetPrepullService(prepullSvc)
+
 	sandboxSvc.StartTTLCleaner(30 * time.Second)
 	fmt.Println("TTL cleaner started (interval: 30s)")
 
+	prepullSvc.StartStatusUpdater(10 * time.Second)
+	fmt.Println("Prepull status updater started (interval: 10s)")
+
+	// Start cleanup for completed prepull DaemonSets
+	go func() {
+		ticker := time.NewTicker(1 * time.Hour)
+		defer ticker.Stop()
+		for range ticker.C {
+			prepullSvc.CleanupCompletedPrepulls(ctx, 24*time.Hour)
+		}
+	}()
+
+	// Create handlers
 	sandboxHandler := handler.NewSandboxHandler(sandboxSvc)
+	templateHandler := handler.NewTemplateHandler(templateSvc)
+	prepullHandler := handler.NewPrepullHandler(prepullSvc, templateSvc)
+	importExportHandler := handler.NewImportExportHandler(importExportSvc)
 
 	r := gin.Default()
 
@@ -55,6 +94,9 @@ func main() {
 
 	api := r.Group("/api/v1")
 	sandboxHandler.RegisterRoutes(api)
+	templateHandler.RegisterRoutes(api)
+	prepullHandler.RegisterRoutes(api)
+	importExportHandler.RegisterRoutes(api)
 
 	port := os.Getenv("PORT")
 	if port == "" {

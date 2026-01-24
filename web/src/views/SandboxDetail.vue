@@ -8,7 +8,7 @@
           </t-link>
           <span>Sandbox: {{ sandbox?.id }}</span>
           <t-tag :theme="getStatusTheme(sandbox?.status || '')">
-            {{ sandbox?.status }}
+            {{ getStatusText(sandbox?.status || '') }}
           </t-tag>
         </t-space>
       </template>
@@ -26,7 +26,9 @@
           <t-descriptions-item label="内存">{{ sandbox.memory }}</t-descriptions-item>
           <t-descriptions-item label="TTL">{{ sandbox.ttl }} 秒</t-descriptions-item>
           <t-descriptions-item label="状态">
-            <t-tag :theme="getStatusTheme(sandbox.status)">{{ sandbox.status }}</t-tag>
+            <t-tag :theme="getStatusTheme(sandbox.status)">{{
+              getStatusText(sandbox.status)
+            }}</t-tag>
           </t-descriptions-item>
           <t-descriptions-item label="创建时间">{{
             formatTime(sandbox.created_at)
@@ -161,8 +163,27 @@ const getStatusTheme = (status: string) => {
       return 'warning'
     case 'failed':
       return 'danger'
+    case 'terminating':
+      return 'warning'
     default:
       return 'default'
+  }
+}
+
+const getStatusText = (status: string) => {
+  switch (status) {
+    case 'running':
+      return '运行中'
+    case 'pending':
+      return '启动中'
+    case 'failed':
+      return '失败'
+    case 'succeeded':
+      return '已完成'
+    case 'terminating':
+      return '正在销毁'
+    default:
+      return status
   }
 }
 

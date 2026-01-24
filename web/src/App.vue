@@ -4,6 +4,24 @@
       <div class="logo">
         <h1>LiteBoxd</h1>
       </div>
+      <div class="nav-links">
+        <t-link
+          :class="['nav-link', { active: route.path === '/sandboxes' }]"
+          theme="light"
+          hover="color"
+          @click="navigateTo('/sandboxes')"
+        >
+          Sandboxes
+        </t-link>
+        <t-link
+          :class="['nav-link', { active: route.path.startsWith('/templates') }]"
+          theme="light"
+          hover="color"
+          @click="navigateTo('/templates')"
+        >
+          模板管理
+        </t-link>
+      </div>
     </t-header>
     <t-content class="app-content">
       <router-view />
@@ -16,7 +34,16 @@
   </t-layout>
 </template>
 
-<script setup lang="ts"></script>
+<script setup lang="ts">
+import { useRouter, useRoute } from 'vue-router'
+
+const router = useRouter()
+const route = useRoute()
+
+const navigateTo = (path: string) => {
+  router.push(path)
+}
+</script>
 
 <style>
 body {
@@ -29,13 +56,42 @@ body {
   align-items: center;
   padding: 0 24px;
   background: var(--td-brand-color);
-  color: white;
+}
+
+.logo {
+  margin-right: 48px;
 }
 
 .logo h1 {
   margin: 0;
   font-size: 20px;
   font-weight: 500;
+  color: white;
+}
+
+.nav-links {
+  display: flex;
+  gap: 24px;
+}
+
+.nav-link {
+  color: rgba(255, 255, 255, 0.8);
+  font-size: 14px;
+  cursor: pointer;
+  text-decoration: none;
+  padding: 8px 12px;
+  border-radius: 4px;
+  transition: all 0.2s;
+}
+
+.nav-link:hover {
+  background: rgba(255, 255, 255, 0.15);
+  color: white;
+}
+
+.nav-link.active {
+  background: rgba(255, 255, 255, 0.2);
+  color: white;
 }
 
 .app-content {

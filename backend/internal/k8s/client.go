@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -73,12 +74,31 @@ func (c *Client) EnsureNamespace(ctx context.Context) error {
 }
 
 type CreatePodOptions struct {
-	ID     string
-	Image  string
-	CPU    string
-	Memory string
-	TTL    int
-	Env    map[string]string
+	ID             string
+	Image          string
+	CPU            string
+	Memory         string
+	TTL            int
+	Env            map[string]string
+	Annotations    map[string]string
+	StartupScript  string     // Startup script to execute after pod is ready
+	StartupFiles   []FileSpec // Files to upload before startup script
+	ReadinessProbe *ProbeSpec // Readiness probe configuration
+}
+
+// FileSpec defines a file to be uploaded to the sandbox
+type FileSpec struct {
+	Source      string // Source URL (for future use)
+	Destination string // Destination path in the sandbox
+	Content     string // File content
+}
+
+// ProbeSpec defines a readiness probe
+type ProbeSpec struct {
+	Exec                []string
+	InitialDelaySeconds int
+	PeriodSeconds       int
+	FailureThreshold    int
 }
 
 func (c *Client) CreatePod(ctx context.Context, opts CreatePodOptions) (*corev1.Pod, error) {
@@ -100,6 +120,16 @@ func (c *Client) CreatePod(ctx context.Context, opts CreatePodOptions) (*corev1.
 
 	var runAsUser int64 = 1000
 
+	// Build annotations
+	annotations := map[string]string{
+		AnnotationTTL:       fmt.Sprintf("%d", opts.TTL),
+		AnnotationCreatedAt: time.Now().UTC().Format(time.RFC3339),
+	}
+	// Merge custom annotations
+	for k, v := range opts.Annotations {
+		annotations[k] = v
+	}
+
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      podName,
@@ -108,10 +138,7 @@ func (c *Client) CreatePod(ctx context.Context, opts CreatePodOptions) (*corev1.
 				"app":          LabelApp,
 				LabelSandboxID: opts.ID,
 			},
-			Annotations: map[string]string{
-				AnnotationTTL:       fmt.Sprintf("%d", opts.TTL),
-				AnnotationCreatedAt: time.Now().UTC().Format(time.RFC3339),
-			},
+			Annotations: annotations,
 		},
 		Spec: corev1.PodSpec{
 			RestartPolicy: corev1.RestartPolicyNever,
@@ -136,10 +163,11 @@ func (c *Client) CreatePod(ctx context.Context, opts CreatePodOptions) (*corev1.
 			},
 			Containers: []corev1.Container{
 				{
-					Name:    "main",
-					Image:   opts.Image,
-					Command: []string{"sleep", "infinity"},
-					Env:     envVars,
+					Name:            "main",
+					Image:           opts.Image,
+					ImagePullPolicy: corev1.PullIfNotPresent,
+					Command:         []string{"sleep", "infinity"},
+					Env:             envVars,
 					Resources: corev1.ResourceRequirements{
 						Limits: corev1.ResourceList{
 							corev1.ResourceCPU:    resource.MustParse(cpuLimit),
@@ -396,4 +424,289 @@ func (c *Client) GetPodEvents(ctx context.Context, sandboxID string) ([]string, 
 
 func boolPtr(b bool) *bool {
 	return &b
+}
+
+// Job operations for image prepull
+
+const (
+	LabelPrepull      = "liteboxd-prepull"
+	LabelPrepullImage = "prepull-image-hash"
+)
+
+// CreatePrepullDaemonSetOptions defines options for creating a prepull Job
+type CreatePrepullDaemonSetOptions struct {
+	ID        string // Unique ID for the prepull task
+	Image     string // Image to prepull
+	ImageHash string // Hash of image name for labeling
+}
+
+// CreatePrepullDaemonSet creates a Job to prepull an image on ready nodes
+func (c *Client) CreatePrepullDaemonSet(ctx context.Context, opts CreatePrepullDaemonSetOptions) error {
+	jobName := fmt.Sprintf("prepull-%s", opts.ID)
+	parallelism := int32(1) // Run one pod per ready node at a time
+
+	// Get number of ready nodes to set parallelism
+	nodes, err := c.GetNodeCount(ctx)
+	if err == nil && nodes > 0 {
+		// Count ready nodes
+		readyNodes := 0
+		nodeList, err := c.clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+		if err == nil {
+			for _, node := range nodeList.Items {
+				if isNodeReady(&node) {
+					readyNodes++
+				}
+			}
+		}
+		if readyNodes > 0 {
+			parallelism = int32(readyNodes)
+		}
+	}
+
+	job := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      jobName,
+			Namespace: SandboxNamespace,
+			Labels: map[string]string{
+				"app":             LabelPrepull,
+				LabelPrepullImage: opts.ImageHash,
+				"job-name":        jobName,
+			},
+			Annotations: map[string]string{
+				"liteboxd.io/prepull-id":    opts.ID,
+				"liteboxd.io/prepull-image": opts.Image,
+			},
+		},
+		Spec: batchv1.JobSpec{
+			Parallelism:             &parallelism,
+			Completions:             &parallelism,
+			BackoffLimit:            int32Ptr(0),   // Don't retry on failure
+			TTLSecondsAfterFinished: int32Ptr(300), // Clean up 5 min after completion
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: map[string]string{
+						"app":             LabelPrepull,
+						LabelPrepullImage: opts.ImageHash,
+						"job-name":        jobName,
+					},
+				},
+				Spec: corev1.PodSpec{
+					RestartPolicy: corev1.RestartPolicyNever,
+					Containers: []corev1.Container{
+						{
+							Name:            "prepull",
+							Image:           opts.Image,
+							ImagePullPolicy: corev1.PullIfNotPresent,
+							Command:         []string{"sh", "-c", "echo 'Image pulled successfully' && sleep 5"},
+							Resources: corev1.ResourceRequirements{
+								Limits: corev1.ResourceList{
+									corev1.ResourceCPU:    resource.MustParse("100m"),
+									corev1.ResourceMemory: resource.MustParse("64Mi"),
+								},
+								Requests: corev1.ResourceList{
+									corev1.ResourceCPU:    resource.MustParse("10m"),
+									corev1.ResourceMemory: resource.MustParse("16Mi"),
+								},
+							},
+						},
+					},
+					Tolerations: []corev1.Toleration{
+						{
+							Key:      "node.kubernetes.io/not-ready",
+							Operator: corev1.TolerationOpExists,
+						},
+						{
+							Key:      "node.kubernetes.io/unreachable",
+							Operator: corev1.TolerationOpExists,
+						},
+						{
+							Key:      "node.kubernetes.io/memory-pressure",
+							Operator: corev1.TolerationOpExists,
+						},
+					},
+				},
+			},
+		},
+	}
+
+	_, err = c.clientset.BatchV1().Jobs(SandboxNamespace).Create(ctx, job, metav1.CreateOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to create prepull job: %w", err)
+	}
+
+	return nil
+}
+
+// GetPrepullDaemonSet retrieves a prepull Job by ID
+func (c *Client) GetPrepullDaemonSet(ctx context.Context, id string) (*batchv1.Job, error) {
+	jobName := fmt.Sprintf("prepull-%s", id)
+	return c.clientset.BatchV1().Jobs(SandboxNamespace).Get(ctx, jobName, metav1.GetOptions{})
+}
+
+// ListPrepullDaemonSets lists all prepull Jobs
+func (c *Client) ListPrepullDaemonSets(ctx context.Context) (*batchv1.JobList, error) {
+	return c.clientset.BatchV1().Jobs(SandboxNamespace).List(ctx, metav1.ListOptions{
+		LabelSelector: fmt.Sprintf("app=%s", LabelPrepull),
+	})
+}
+
+// DeletePrepullDaemonSet deletes a prepull Job by ID
+func (c *Client) DeletePrepullDaemonSet(ctx context.Context, id string) error {
+	jobName := fmt.Sprintf("prepull-%s", id)
+	return c.clientset.BatchV1().Jobs(SandboxNamespace).Delete(ctx, jobName, metav1.DeleteOptions{})
+}
+
+// PrepullStatus represents the status of a prepull operation
+type PrepullStatus struct {
+	DesiredNodes int
+	ReadyNodes   int
+	IsComplete   bool
+}
+
+// GetPrepullStatus returns the status of a prepull Job
+func (c *Client) GetPrepullStatus(ctx context.Context, id string) (*PrepullStatus, error) {
+	job, err := c.GetPrepullDaemonSet(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	status := &PrepullStatus{
+		DesiredNodes: int(*job.Spec.Parallelism),
+		ReadyNodes:   int(job.Status.Succeeded),
+	}
+
+	// Job is complete when Succeeded equals Completions
+	status.IsComplete = job.Status.Succeeded > 0 && job.Status.Succeeded >= *job.Spec.Completions
+
+	return status, nil
+}
+
+// IsImagePrepulled checks if an image has been prepulled on the cluster
+func (c *Client) IsImagePrepulled(ctx context.Context, image string) (bool, error) {
+	// List all prepull Jobs
+	jobList, err := c.ListPrepullDaemonSets(ctx)
+	if err != nil {
+		return false, err
+	}
+
+	// Check if there's a completed prepull for this image
+	for _, job := range jobList.Items {
+		// Check annotation for the image
+		img := job.Annotations["liteboxd.io/prepull-image"]
+		if img == image { // Found matching prepull
+			// Job is complete when Succeeded equals Completions
+			if job.Status.Succeeded > 0 && job.Status.Succeeded >= *job.Spec.Completions {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
+// GetNodeCount returns the total number of nodes in the cluster
+func (c *Client) GetNodeCount(ctx context.Context) (int, error) {
+	nodes, err := c.clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return 0, fmt.Errorf("failed to list nodes: %w", err)
+	}
+	return len(nodes.Items), nil
+}
+
+func isNodeReady(node *corev1.Node) bool {
+	for _, condition := range node.Status.Conditions {
+		if condition.Type == corev1.NodeReady {
+			return condition.Status == corev1.ConditionTrue
+		}
+	}
+	return false
+}
+
+func int32Ptr(i int32) *int32 {
+	return &i
+}
+
+func truePtr(b bool) *bool {
+	return &b
+}
+
+// WaitForReady waits for a pod to be ready with optional custom readiness probe
+func (c *Client) WaitForReady(ctx context.Context, sandboxID string, probe *ProbeSpec) error {
+	podName := fmt.Sprintf("sandbox-%s", sandboxID)
+
+	// Default polling settings
+	pollInterval := 2 * time.Second
+	timeout := 5 * time.Minute
+	if probe != nil {
+		if probe.PeriodSeconds > 0 {
+			pollInterval = time.Duration(probe.PeriodSeconds) * time.Second
+		}
+		if probe.InitialDelaySeconds > 0 {
+			// Add initial delay
+			select {
+			case <-time.After(time.Duration(probe.InitialDelaySeconds) * time.Second):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("timeout waiting for pod to be ready")
+		case <-ticker.C:
+			pod, err := c.clientset.CoreV1().Pods(SandboxNamespace).Get(ctx, podName, metav1.GetOptions{})
+			if err != nil {
+				return fmt.Errorf("failed to get pod: %w", err)
+			}
+
+			// Check if pod has failed
+			if pod.Status.Phase == corev1.PodFailed {
+				return fmt.Errorf("pod failed")
+			}
+
+			// If custom probe is specified, use it
+			if probe != nil && len(probe.Exec) > 0 {
+				// Use a background context for exec to avoid timeout from parent context
+				result, err := c.Exec(context.Background(), sandboxID, probe.Exec)
+				if err != nil {
+					continue // Try again
+				}
+				if result.ExitCode == 0 {
+					return nil // Ready
+				}
+				// Exit code non-zero, continue polling
+			} else {
+				// Default: wait for pod to be running and ready
+				if pod.Status.Phase == corev1.PodRunning {
+					for _, cond := range pod.Status.Conditions {
+						if cond.Type == corev1.PodReady && cond.Status == corev1.ConditionTrue {
+							return nil // Ready
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+// UploadFiles uploads multiple files to a sandbox
+func (c *Client) UploadFiles(ctx context.Context, sandboxID string, files []FileSpec) error {
+	for _, file := range files {
+		content := []byte(file.Content)
+		if file.Source != "" {
+			// For future: fetch content from URL
+			return fmt.Errorf("source URL not yet supported")
+		}
+		if err := c.UploadFile(ctx, sandboxID, file.Destination, content); err != nil {
+			return fmt.Errorf("failed to upload file %s: %w", file.Destination, err)
+		}
+	}
+	return nil
 }

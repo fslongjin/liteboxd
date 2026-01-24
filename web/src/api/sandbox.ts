@@ -12,16 +12,26 @@ export interface Sandbox {
   memory: string
   ttl: number
   status: string
+  template?: string
+  templateVersion?: number
   created_at: string
   expires_at: string
 }
 
 export interface CreateSandboxRequest {
-  image: string
+  image?: string
   cpu?: string
   memory?: string
   ttl?: number
   env?: Record<string, string>
+  template?: string
+  templateVersion?: number
+  overrides?: {
+    cpu?: string
+    memory?: string
+    ttl?: number
+    env?: Record<string, string>
+  }
 }
 
 export interface ExecRequest {

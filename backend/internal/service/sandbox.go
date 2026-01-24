@@ -13,7 +13,8 @@ import (
 )
 
 type SandboxService struct {
-	k8sClient *k8s.Client
+	k8sClient   *k8s.Client
+	templateSvc *TemplateService
 }
 
 func NewSandboxService(k8sClient *k8s.Client) *SandboxService {
@@ -22,7 +23,92 @@ func NewSandboxService(k8sClient *k8s.Client) *SandboxService {
 	}
 }
 
+// SetTemplateService sets the template service for template-based sandbox creation
+func (s *SandboxService) SetTemplateService(templateSvc *TemplateService) {
+	s.templateSvc = templateSvc
+}
+
 func (s *SandboxService) Create(ctx context.Context, req *model.CreateSandboxRequest) (*model.Sandbox, error) {
+	var templateName string
+	var templateVersion int
+	var startupScript string
+	var startupFiles []model.FileSpec
+	var readinessProbe *model.ProbeSpec
+	startupTimeout := 300 // default 5 minutes
+
+	// Handle template-based creation
+	if req.IsTemplateRequest() {
+		if s.templateSvc == nil {
+			return nil, fmt.Errorf("template service not configured")
+		}
+
+		spec, err := s.templateSvc.GetSpecForSandbox(ctx, req.Template, req.TemplateVersion)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get template: %w", err)
+		}
+
+		// Get actual template version
+		template, err := s.templateSvc.Get(ctx, req.Template)
+		if err != nil {
+			return nil, err
+		}
+		templateName = req.Template
+		if req.TemplateVersion > 0 {
+			templateVersion = req.TemplateVersion
+		} else {
+			templateVersion = template.LatestVersion
+		}
+
+		// Apply template spec to request
+		req.Image = spec.Image
+		req.CPU = spec.Resources.CPU
+		req.Memory = spec.Resources.Memory
+		req.TTL = spec.TTL
+
+		// Merge environment variables
+		if spec.Env != nil {
+			if req.Env == nil {
+				req.Env = make(map[string]string)
+			}
+			for k, v := range spec.Env {
+				if _, exists := req.Env[k]; !exists {
+					req.Env[k] = v
+				}
+			}
+		}
+
+		// Capture advanced features from template
+		startupScript = spec.StartupScript
+		startupFiles = spec.Files
+		readinessProbe = spec.ReadinessProbe
+		if spec.StartupTimeout > 0 {
+			startupTimeout = spec.StartupTimeout
+		}
+
+		// Apply overrides
+		if req.Overrides != nil {
+			if req.Overrides.CPU != "" {
+				req.CPU = req.Overrides.CPU
+			}
+			if req.Overrides.Memory != "" {
+				req.Memory = req.Overrides.Memory
+			}
+			if req.Overrides.TTL > 0 {
+				req.TTL = req.Overrides.TTL
+			}
+			if req.Overrides.Env != nil {
+				for k, v := range req.Overrides.Env {
+					req.Env[k] = v
+				}
+			}
+		}
+	}
+
+	// Validate required fields
+	if req.Image == "" {
+		return nil, fmt.Errorf("image is required")
+	}
+
 	id := generateID()
 
 	ttl := req.TTL
@@ -30,13 +116,46 @@ func (s *SandboxService) Create(ctx context.Context, req *model.CreateSandboxReq
 		ttl = 3600
 	}
 
+	// Convert model.FileSpec to k8s.FileSpec
+	var files []k8s.FileSpec
+	for _, f := range startupFiles {
+		files = append(files, k8s.FileSpec{
+			Source:      f.Source,
+			Destination: f.Destination,
+			Content:     f.Content,
+		})
+	}
+
+	// Convert model.ProbeSpec to k8s.ProbeSpec
+	var probe *k8s.ProbeSpec
+	if readinessProbe != nil {
+		probe = &k8s.ProbeSpec{
+			Exec:                readinessProbe.Exec.Command,
+			InitialDelaySeconds: readinessProbe.InitialDelaySeconds,
+			PeriodSeconds:       readinessProbe.PeriodSeconds,
+			FailureThreshold:    readinessProbe.FailureThreshold,
+		}
+	}
+
 	opts := k8s.CreatePodOptions{
-		ID:     id,
-		Image:  req.Image,
-		CPU:    req.CPU,
-		Memory: req.Memory,
-		TTL:    ttl,
-		Env:    req.Env,
+		ID:             id,
+		Image:          req.Image,
+		CPU:            req.CPU,
+		Memory:         req.Memory,
+		TTL:            ttl,
+		Env:            req.Env,
+		StartupScript:  startupScript,
+		StartupFiles:   files,
+		ReadinessProbe: probe,
+	}
+
+	// Add template annotations if this is a template-based sandbox
+	if templateName != "" {
+		if opts.Annotations == nil {
+			opts.Annotations = make(map[string]string)
+		}
+		opts.Annotations["liteboxd.io/template"] = templateName
+		opts.Annotations["liteboxd.io/template-version"] = strconv.Itoa(templateVersion)
 	}
 
 	pod, err := s.k8sClient.CreatePod(ctx, opts)
@@ -44,7 +163,46 @@ func (s *SandboxService) Create(ctx context.Context, req *model.CreateSandboxReq
 		return nil, fmt.Errorf("failed to create pod: %w", err)
 	}
 
-	return s.podToSandbox(pod), nil
+	sandbox := s.podToSandbox(pod)
+	sandbox.Template = templateName
+	sandbox.TemplateVersion = templateVersion
+
+	// Run post-creation tasks asynchronously (wait for ready, upload files, exec startup script)
+	go func() {
+		s.runPostCreationTasks(context.Background(), id, probe, files, startupScript, startupTimeout)
+	}()
+
+	return sandbox, nil
+}
+
+// runPostCreationTasks runs tasks after pod creation in the background
+func (s *SandboxService) runPostCreationTasks(ctx context.Context, id string, probe *k8s.ProbeSpec, files []k8s.FileSpec, startupScript string, startupTimeout int) {
+	// Wait for pod to be ready (with custom probe if specified)
+	readyCtx, cancel := context.WithTimeout(ctx, time.Duration(startupTimeout)*time.Second)
+	defer cancel()
+	if err := s.k8sClient.WaitForReady(readyCtx, id, probe); err != nil {
+		// Pod created but not ready - log the error
+		fmt.Printf("Post-creation: pod %s not ready: %v\n", id, err)
+		return
+	}
+
+	// Upload files if specified
+	if len(files) > 0 {
+		if err := s.k8sClient.UploadFiles(ctx, id, files); err != nil {
+			fmt.Printf("Post-creation: failed to upload files to pod %s: %v\n", id, err)
+		}
+	}
+
+	// Execute startup script if specified
+	if startupScript != "" {
+		execCtx, execCancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer execCancel()
+		if _, err := s.k8sClient.Exec(execCtx, id, []string{"sh", "-c", startupScript}); err != nil {
+			fmt.Printf("Post-creation: startup script failed for pod %s: %v\n", id, err)
+		}
+	}
+
+	fmt.Printf("Post-creation tasks completed for pod %s\n", id)
 }
 
 func (s *SandboxService) Get(ctx context.Context, id string) (*model.Sandbox, error) {
@@ -196,14 +354,19 @@ func (s *SandboxService) podToSandbox(pod *corev1.Pod) *model.Sandbox {
 		CPU:       cpu,
 		Memory:    memory,
 		TTL:       ttl,
-		Status:    convertPodPhase(pod.Status.Phase),
+		Status:    convertPodStatus(pod),
 		CreatedAt: createdAt,
 		ExpiresAt: expiresAt,
 	}
 }
 
-func convertPodPhase(phase corev1.PodPhase) model.SandboxStatus {
-	switch phase {
+func convertPodStatus(pod *corev1.Pod) model.SandboxStatus {
+	// Check if pod is being terminated (has DeletionTimestamp)
+	if pod.DeletionTimestamp != nil {
+		return model.SandboxStatusTerminating
+	}
+
+	switch pod.Status.Phase {
 	case corev1.PodPending:
 		return model.SandboxStatusPending
 	case corev1.PodRunning:

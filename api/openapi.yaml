@@ -15,6 +15,10 @@ servers:
 tags:
   - name: sandboxes
     description: Sandbox lifecycle management
+  - name: templates
+    description: Template management for sandbox configurations
+  - name: prepull
+    description: Image prepull management
   - name: execution
     description: Command execution in sandboxes
   - name: files
@@ -268,6 +272,460 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
+  # Template endpoints
+  /templates:
+    post:
+      tags:
+        - templates
+      summary: Create a new template
+      description: Creates a new sandbox template with the specified configuration
+      operationId: createTemplate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTemplateRequest'
+      responses:
+        '201':
+          description: Template created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Template'
+        '400':
+          description: Invalid request body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Template already exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+    get:
+      tags:
+        - templates
+      summary: List all templates
+      description: Returns a paginated list of templates
+      operationId: listTemplates
+      parameters:
+        - name: tag
+          in: query
+          schema:
+            type: string
+          description: Filter by tag
+        - name: search
+          in: query
+          schema:
+            type: string
+          description: Search in name, displayName, description
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+          description: Page number
+        - name: pageSize
+          in: query
+          schema:
+            type: integer
+            default: 20
+          description: Items per page (max 100)
+      responses:
+        '200':
+          description: List of templates
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TemplateListResponse'
+
+  /templates/{name}:
+    parameters:
+      - name: name
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Template name
+    get:
+      tags:
+        - templates
+      summary: Get template details
+      operationId: getTemplate
+      responses:
+        '200':
+          description: Template details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Template'
+        '404':
+          description: Template not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    put:
+      tags:
+        - templates
+      summary: Update template
+      description: Updates a template and creates a new version
+      operationId: updateTemplate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateTemplateRequest'
+      responses:
+        '200':
+          description: Template updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Template'
+        '404':
+          description: Template not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    delete:
+      tags:
+        - templates
+      summary: Delete template
+      operationId: deleteTemplate
+      responses:
+        '204':
+          description: Template deleted
+        '404':
+          description: Template not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /templates/{name}/versions:
+    parameters:
+      - name: name
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      tags:
+        - templates
+      summary: List template versions
+      operationId: listTemplateVersions
+      responses:
+        '200':
+          description: List of versions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VersionListResponse'
+        '404':
+          description: Template not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /templates/{name}/versions/{version}:
+    parameters:
+      - name: name
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: version
+        in: path
+        required: true
+        schema:
+          type: integer
+    get:
+      tags:
+        - templates
+      summary: Get specific version
+      operationId: getTemplateVersion
+      responses:
+        '200':
+          description: Version details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TemplateVersion'
+        '404':
+          description: Version not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /templates/{name}/rollback:
+    parameters:
+      - name: name
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags:
+        - templates
+      summary: Rollback template
+      description: Rolls back template to a specific version (creates new version)
+      operationId: rollbackTemplate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RollbackRequest'
+      responses:
+        '200':
+          description: Rollback successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RollbackResponse'
+        '404':
+          description: Template or version not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  # Image prepull endpoints
+  /images/prepull:
+    post:
+      tags:
+        - prepull
+      summary: Trigger image prepull
+      description: Prepulls a container image on all K8s nodes
+      operationId: createPrepull
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreatePrepullRequest'
+      responses:
+        '202':
+          description: Prepull task created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PrepullResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Prepull already in progress
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+    get:
+      tags:
+        - prepull
+      summary: List prepull tasks
+      description: Returns all image prepull tasks
+      operationId: listPrepulls
+      parameters:
+        - name: image
+          in: query
+          schema:
+            type: string
+          description: Filter by image name
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [pending, pulling, completed, failed]
+          description: Filter by status
+      responses:
+        '200':
+          description: List of prepull tasks
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PrepullListResponse'
+
+  /images/prepull/{id}:
+    delete:
+      tags:
+        - prepull
+      summary: Delete prepull task
+      description: Cancels and deletes a prepull task and its DaemonSet
+      operationId: deletePrepull
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Prepull task ID
+      responses:
+        '204':
+          description: Prepull task deleted
+        '404':
+          description: Prepull task not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /templates/{name}/prepull:
+    post:
+      tags:
+        - prepull
+      summary: Prepull template image
+      description: Triggers prepull for the image used by the specified template
+      operationId: prepullTemplate
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Template name
+      responses:
+        '202':
+          description: Prepull task created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PrepullResponse'
+        '404':
+          description: Template not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Prepull already in progress
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  # Template import/export endpoints
+  /templates/import:
+    post:
+      tags:
+        - templates
+      summary: Import templates from YAML
+      description: Imports templates from a YAML file. Supports single template or list of templates.
+      operationId: importTemplates
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - file
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: YAML file containing template(s)
+                strategy:
+                  type: string
+                  enum: [create-only, update-only, create-or-update]
+                  default: create-or-update
+                  description: Import strategy
+                prepull:
+                  type: boolean
+                  default: false
+                  description: Auto prepull images after import
+      responses:
+        '200':
+          description: Templates imported
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImportTemplatesResponse'
+        '400':
+          description: Invalid YAML or request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /templates/export:
+    get:
+      tags:
+        - templates
+      summary: Export all templates to YAML
+      description: Exports all templates as YAML format
+      operationId: exportTemplates
+      parameters:
+        - name: tag
+          in: query
+          schema:
+            type: string
+          description: Filter by tag
+        - name: names
+          in: query
+          schema:
+            type: string
+          description: Comma-separated template names
+      responses:
+        '200':
+          description: Templates exported as YAML
+          content:
+            application/x-yaml:
+              schema:
+                type: string
+          headers:
+            Content-Type:
+              description: application/x-yaml
+
+  /templates/{name}/export:
+    get:
+      tags:
+        - templates
+      summary: Export single template to YAML
+      description: Exports a specific template as YAML format
+      operationId: exportTemplate
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Template name
+        - name: version
+          in: query
+          schema:
+            type: integer
+          description: Template version (default latest)
+      responses:
+        '200':
+          description: Template exported as YAML
+          content:
+            application/x-yaml:
+              schema:
+                type: string
+          headers:
+            Content-Type:
+              description: application/x-yaml
+        '404':
+          description: Template not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
 components:
   parameters:
     SandboxId:
@@ -321,6 +779,14 @@ components:
             MY_VAR: "value"
         status:
           $ref: '#/components/schemas/SandboxStatus'
+        template:
+          type: string
+          description: Template name if created from template
+          example: "python-data-science"
+        templateVersion:
+          type: integer
+          description: Template version if created from template
+          example: 1
         created_at:
           type: string
           format: date-time
@@ -345,12 +811,12 @@ components:
 
     CreateSandboxRequest:
       type: object
-      required:
-        - image
+      description: Request to create a sandbox (either direct config or from template)
       properties:
+        # Direct configuration
         image:
           type: string
-          description: Container image to use for the sandbox
+          description: Container image (required if not using template)
           example: "python:3.11-slim"
         cpu:
           type: string
@@ -369,9 +835,30 @@ components:
           type: object
           additionalProperties:
             type: string
-          description: Environment variables to set in the container
-          example:
-            MY_VAR: "value"
+          description: Environment variables
+        # Template-based creation
+        template:
+          type: string
+          description: Template name (if specified, image is not required)
+          example: "python-data-science"
+        templateVersion:
+          type: integer
+          description: Template version (default latest)
+          example: 1
+        overrides:
+          type: object
+          description: Override template configuration
+          properties:
+            cpu:
+              type: string
+            memory:
+              type: string
+            ttl:
+              type: integer
+            env:
+              type: object
+              additionalProperties:
+                type: string
 
     SandboxListResponse:
       type: object
@@ -460,3 +947,329 @@ components:
           type: string
           description: Error message
           example: "sandbox not found"
+
+    # Template schemas
+    Template:
+      type: object
+      properties:
+        id:
+          type: string
+          example: "tpl-a1b2c3d4"
+        name:
+          type: string
+          example: "python-data-science"
+        displayName:
+          type: string
+          example: "Python Data Science"
+        description:
+          type: string
+          example: "Python environment with data science packages"
+        tags:
+          type: array
+          items:
+            type: string
+          example: ["python", "data-science"]
+        author:
+          type: string
+        isPublic:
+          type: boolean
+          default: true
+        latestVersion:
+          type: integer
+          example: 1
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        spec:
+          $ref: '#/components/schemas/TemplateSpec'
+
+    TemplateSpec:
+      type: object
+      required:
+        - image
+      properties:
+        image:
+          type: string
+          example: "python:3.11-slim"
+        resources:
+          type: object
+          properties:
+            cpu:
+              type: string
+              default: "500m"
+            memory:
+              type: string
+              default: "512Mi"
+        ttl:
+          type: integer
+          default: 3600
+        env:
+          type: object
+          additionalProperties:
+            type: string
+        startupScript:
+          type: string
+        startupTimeout:
+          type: integer
+          default: 300
+        files:
+          type: array
+          items:
+            $ref: '#/components/schemas/FileSpec'
+        readinessProbe:
+          $ref: '#/components/schemas/ProbeSpec'
+
+    FileSpec:
+      type: object
+      properties:
+        source:
+          type: string
+        destination:
+          type: string
+        content:
+          type: string
+
+    ProbeSpec:
+      type: object
+      properties:
+        exec:
+          type: object
+          properties:
+            command:
+              type: array
+              items:
+                type: string
+        initialDelaySeconds:
+          type: integer
+        periodSeconds:
+          type: integer
+        failureThreshold:
+          type: integer
+
+    TemplateVersion:
+      type: object
+      properties:
+        id:
+          type: string
+        templateId:
+          type: string
+        version:
+          type: integer
+        spec:
+          $ref: '#/components/schemas/TemplateSpec'
+        changelog:
+          type: string
+        createdBy:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+
+    CreateTemplateRequest:
+      type: object
+      required:
+        - name
+        - spec
+      properties:
+        name:
+          type: string
+          pattern: '^[a-z0-9][a-z0-9-]*[a-z0-9]$'
+        displayName:
+          type: string
+        description:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        isPublic:
+          type: boolean
+          default: true
+        spec:
+          $ref: '#/components/schemas/TemplateSpec'
+        autoPrepull:
+          type: boolean
+          default: false
+
+    UpdateTemplateRequest:
+      type: object
+      required:
+        - spec
+      properties:
+        displayName:
+          type: string
+        description:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        isPublic:
+          type: boolean
+        spec:
+          $ref: '#/components/schemas/TemplateSpec'
+        changelog:
+          type: string
+
+    RollbackRequest:
+      type: object
+      required:
+        - targetVersion
+      properties:
+        targetVersion:
+          type: integer
+        changelog:
+          type: string
+
+    RollbackResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        latestVersion:
+          type: integer
+        rolledBackFrom:
+          type: integer
+        rolledBackTo:
+          type: integer
+        updatedAt:
+          type: string
+          format: date-time
+
+    TemplateListResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Template'
+        total:
+          type: integer
+        page:
+          type: integer
+        pageSize:
+          type: integer
+
+    VersionListResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/TemplateVersion'
+        total:
+          type: integer
+
+    # Prepull schemas
+    CreatePrepullRequest:
+      type: object
+      required:
+        - image
+      properties:
+        image:
+          type: string
+          description: Container image to prepull
+          example: "python:3.11-slim"
+        timeout:
+          type: integer
+          description: Timeout in seconds (default 600)
+          minimum: 1
+          example: 600
+
+    PrepullResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Prepull task ID
+          example: "pp-a1b2c3d4"
+        image:
+          type: string
+          description: Container image
+          example: "python:3.11-slim"
+        status:
+          type: string
+          enum: [pending, pulling, completed, failed]
+          description: Prepull status
+        progress:
+          type: object
+          properties:
+            ready:
+              type: integer
+              description: Number of nodes with image ready
+            total:
+              type: integer
+              description: Total number of nodes
+        template:
+          type: string
+          description: Template name if triggered from template
+          example: "python-data-science"
+        error:
+          type: string
+          description: Error message if failed
+        startedAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+
+    PrepullListResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/PrepullResponse'
+
+    # Import/Export schemas
+    ImportTemplatesResponse:
+      type: object
+      properties:
+        total:
+          type: integer
+          description: Total number of templates to import
+        created:
+          type: integer
+          description: Number of templates created
+        updated:
+          type: integer
+          description: Number of templates updated
+        skipped:
+          type: integer
+          description: Number of templates skipped
+        failed:
+          type: integer
+          description: Number of templates that failed to import
+        results:
+          type: array
+          description: Detailed results for each template
+          items:
+            $ref: '#/components/schemas/ImportResult'
+        prepullStarted:
+          type: array
+          description: List of images that triggered prepull
+          items:
+            type: string
+
+    ImportResult:
+      type: object
+      properties:
+        name:
+          type: string
+          description: Template name
+        action:
+          type: string
+          enum: [created, updated, skipped, failed]
+          description: Action performed on the template
+        version:
+          type: integer
+          description: Template version (for created/updated)
+        error:
+          type: string
+          description: Error message (for failed imports)
