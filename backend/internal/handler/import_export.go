@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/fslongjin/liteboxd/internal/model"
-	"github.com/fslongjin/liteboxd/internal/service"
+	"github.com/fslongjin/liteboxd/backend/internal/model"
+	"github.com/fslongjin/liteboxd/backend/internal/service"
 	"github.com/gin-gonic/gin"
 )
 

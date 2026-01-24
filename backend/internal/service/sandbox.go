@@ -6,8 +6,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/fslongjin/liteboxd/internal/k8s"
-	"github.com/fslongjin/liteboxd/internal/model"
+	"github.com/fslongjin/liteboxd/backend/internal/k8s"
+	"github.com/fslongjin/liteboxd/backend/internal/model"
 	"github.com/google/uuid"
 	corev1 "k8s.io/api/core/v1"
 )

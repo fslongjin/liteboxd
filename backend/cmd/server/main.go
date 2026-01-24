@@ -8,10 +8,10 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/fslongjin/liteboxd/internal/handler"
-	"github.com/fslongjin/liteboxd/internal/k8s"
-	"github.com/fslongjin/liteboxd/internal/service"
-	"github.com/fslongjin/liteboxd/internal/store"
+	"github.com/fslongjin/liteboxd/backend/internal/handler"
+	"github.com/fslongjin/liteboxd/backend/internal/k8s"
+	"github.com/fslongjin/liteboxd/backend/internal/service"
+	"github.com/fslongjin/liteboxd/backend/internal/store"
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 )

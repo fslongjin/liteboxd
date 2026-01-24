@@ -19,7 +19,7 @@ export interface Sandbox {
 }
 
 export interface CreateSandboxRequest {
-  template: string  // required
+  template: string // required
   templateVersion?: number
   overrides?: {
     cpu?: string

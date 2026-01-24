@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"regexp"
 
-	"github.com/fslongjin/liteboxd/internal/model"
-	"github.com/fslongjin/liteboxd/internal/store"
+	"github.com/fslongjin/liteboxd/backend/internal/model"
+	"github.com/fslongjin/liteboxd/backend/internal/store"
 )
 
 // TemplateService handles template business logic

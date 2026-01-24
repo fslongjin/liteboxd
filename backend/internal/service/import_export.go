@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fslongjin/liteboxd/internal/model"
+	"github.com/fslongjin/liteboxd/backend/internal/model"
 	"gopkg.in/yaml.v3"
 )
 

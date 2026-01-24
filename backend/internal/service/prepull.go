@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fslongjin/liteboxd/internal/k8s"
-	"github.com/fslongjin/liteboxd/internal/model"
-	"github.com/fslongjin/liteboxd/internal/store"
+	"github.com/fslongjin/liteboxd/backend/internal/k8s"
+	"github.com/fslongjin/liteboxd/backend/internal/model"
+	"github.com/fslongjin/liteboxd/backend/internal/store"
 )
 
 // PrepullService handles image prepull operations
