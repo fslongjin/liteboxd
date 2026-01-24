@@ -32,7 +32,7 @@ paths:
       tags:
         - sandboxes
       summary: Create a new sandbox
-      description: Creates a new sandbox with the specified configuration. The sandbox will be automatically deleted after the TTL expires.
+      description: Creates a new sandbox from a template. The template must exist before creating a sandbox. All sandboxes must be created from a template.
       operationId: createSandbox
       requestBody:
         required: true
@@ -41,12 +41,12 @@ paths:
             schema:
               $ref: '#/components/schemas/CreateSandboxRequest'
             example:
-              image: "python:3.11-slim"
-              cpu: "500m"
-              memory: "512Mi"
-              ttl: 3600
-              env:
-                MY_VAR: "value"
+              template: "python-data-science"
+              templateVersion: 1
+              overrides:
+                cpu: "500m"
+                memory: "512Mi"
+                ttl: 3600
       responses:
         '201':
           description: Sandbox created successfully
@@ -811,35 +811,13 @@ components:
 
     CreateSandboxRequest:
       type: object
-      description: Request to create a sandbox (either direct config or from template)
+      description: Request to create a sandbox from a template. Template is required.
+      required:
+        - template
       properties:
-        # Direct configuration
-        image:
-          type: string
-          description: Container image (required if not using template)
-          example: "python:3.11-slim"
-        cpu:
-          type: string
-          description: CPU limit in Kubernetes format (default "500m")
-          example: "500m"
-        memory:
-          type: string
-          description: Memory limit in Kubernetes format (default "512Mi")
-          example: "512Mi"
-        ttl:
-          type: integer
-          description: Time to live in seconds (default 3600)
-          minimum: 1
-          example: 3600
-        env:
-          type: object
-          additionalProperties:
-            type: string
-          description: Environment variables
-        # Template-based creation
         template:
           type: string
-          description: Template name (if specified, image is not required)
+          description: Template name (required)
           example: "python-data-science"
         templateVersion:
           type: integer
@@ -851,14 +829,22 @@ components:
           properties:
             cpu:
               type: string
+              description: CPU limit in Kubernetes format
+              example: "500m"
             memory:
               type: string
+              description: Memory limit in Kubernetes format
+              example: "512Mi"
             ttl:
               type: integer
+              description: Time to live in seconds
+              minimum: 1
+              example: 3600
             env:
               type: object
               additionalProperties:
                 type: string
+              description: Additional environment variables (merged with template env)
 
     SandboxListResponse:
       type: object

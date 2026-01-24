@@ -29,89 +29,75 @@ func (s *SandboxService) SetTemplateService(templateSvc *TemplateService) {
 }
 
 func (s *SandboxService) Create(ctx context.Context, req *model.CreateSandboxRequest) (*model.Sandbox, error) {
-	var templateName string
-	var templateVersion int
-	var startupScript string
-	var startupFiles []model.FileSpec
-	var readinessProbe *model.ProbeSpec
-	startupTimeout := 300 // default 5 minutes
+	// All sandboxes must be created from a template
+	if req.Template == "" {
+		return nil, fmt.Errorf("template is required")
+	}
 
-	// Handle template-based creation
-	if req.IsTemplateRequest() {
-		if s.templateSvc == nil {
-			return nil, fmt.Errorf("template service not configured")
+	if s.templateSvc == nil {
+		return nil, fmt.Errorf("template service not configured")
+	}
+
+	// Get template spec
+	spec, err := s.templateSvc.GetSpecForSandbox(ctx, req.Template, req.TemplateVersion)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get template: %w", err)
+	}
+
+	// Get actual template version
+	template, err := s.templateSvc.Get(ctx, req.Template)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get template info: %w", err)
+	}
+
+	templateVersion := req.TemplateVersion
+	if templateVersion <= 0 {
+		templateVersion = template.LatestVersion
+	}
+
+	// Apply template spec as base configuration
+	image := spec.Image
+	cpu := spec.Resources.CPU
+	memory := spec.Resources.Memory
+	ttl := spec.TTL
+	env := spec.Env
+
+	startupScript := spec.StartupScript
+	startupFiles := spec.Files
+	readinessProbe := spec.ReadinessProbe
+	startupTimeout := spec.StartupTimeout
+	if startupTimeout <= 0 {
+		startupTimeout = 300 // default 5 minutes
+	}
+
+	// Apply overrides
+	if req.Overrides != nil {
+		if req.Overrides.CPU != "" {
+			cpu = req.Overrides.CPU
 		}
-
-		spec, err := s.templateSvc.GetSpecForSandbox(ctx, req.Template, req.TemplateVersion)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get template: %w", err)
+		if req.Overrides.Memory != "" {
+			memory = req.Overrides.Memory
 		}
-
-		// Get actual template version
-		template, err := s.templateSvc.Get(ctx, req.Template)
-		if err != nil {
-			return nil, err
+		if req.Overrides.TTL > 0 {
+			ttl = req.Overrides.TTL
 		}
-		templateName = req.Template
-		if req.TemplateVersion > 0 {
-			templateVersion = req.TemplateVersion
-		} else {
-			templateVersion = template.LatestVersion
-		}
-
-		// Apply template spec to request
-		req.Image = spec.Image
-		req.CPU = spec.Resources.CPU
-		req.Memory = spec.Resources.Memory
-		req.TTL = spec.TTL
-
-		// Merge environment variables
-		if spec.Env != nil {
-			if req.Env == nil {
-				req.Env = make(map[string]string)
+		if req.Overrides.Env != nil {
+			if env == nil {
+				env = make(map[string]string)
 			}
-			for k, v := range spec.Env {
-				if _, exists := req.Env[k]; !exists {
-					req.Env[k] = v
-				}
-			}
-		}
-
-		// Capture advanced features from template
-		startupScript = spec.StartupScript
-		startupFiles = spec.Files
-		readinessProbe = spec.ReadinessProbe
-		if spec.StartupTimeout > 0 {
-			startupTimeout = spec.StartupTimeout
-		}
-
-		// Apply overrides
-		if req.Overrides != nil {
-			if req.Overrides.CPU != "" {
-				req.CPU = req.Overrides.CPU
-			}
-			if req.Overrides.Memory != "" {
-				req.Memory = req.Overrides.Memory
-			}
-			if req.Overrides.TTL > 0 {
-				req.TTL = req.Overrides.TTL
-			}
-			if req.Overrides.Env != nil {
-				for k, v := range req.Overrides.Env {
-					req.Env[k] = v
-				}
+			for k, v := range req.Overrides.Env {
+				env[k] = v
 			}
 		}
 	}
 
 	// Validate required fields
-	if req.Image == "" {
-		return nil, fmt.Errorf("image is required")
+	if image == "" {
+		return nil, fmt.Errorf("template spec is invalid: image is required")
 	}
 
 	id := generateID()
 
-	ttl := req.TTL
 	if ttl <= 0 {
 		ttl = 3600
 	}
@@ -137,25 +123,23 @@ func (s *SandboxService) Create(ctx context.Context, req *model.CreateSandboxReq
 		}
 	}
 
+	// Build annotations
+	annotations := map[string]string{
+		"liteboxd.io/template":         req.Template,
+		"liteboxd.io/template-version": strconv.Itoa(templateVersion),
+	}
+
 	opts := k8s.CreatePodOptions{
 		ID:             id,
-		Image:          req.Image,
-		CPU:            req.CPU,
-		Memory:         req.Memory,
+		Image:          image,
+		CPU:            cpu,
+		Memory:         memory,
 		TTL:            ttl,
-		Env:            req.Env,
+		Env:            env,
 		StartupScript:  startupScript,
 		StartupFiles:   files,
 		ReadinessProbe: probe,
-	}
-
-	// Add template annotations if this is a template-based sandbox
-	if templateName != "" {
-		if opts.Annotations == nil {
-			opts.Annotations = make(map[string]string)
-		}
-		opts.Annotations["liteboxd.io/template"] = templateName
-		opts.Annotations["liteboxd.io/template-version"] = strconv.Itoa(templateVersion)
+		Annotations:    annotations,
 	}
 
 	pod, err := s.k8sClient.CreatePod(ctx, opts)
@@ -164,7 +148,7 @@ func (s *SandboxService) Create(ctx context.Context, req *model.CreateSandboxReq
 	}
 
 	sandbox := s.podToSandbox(pod)
-	sandbox.Template = templateName
+	sandbox.Template = req.Template
 	sandbox.TemplateVersion = templateVersion
 
 	// Run post-creation tasks asynchronously (wait for ready, upload files, exec startup script)

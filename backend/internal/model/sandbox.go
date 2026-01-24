@@ -27,17 +27,11 @@ type Sandbox struct {
 	ExpiresAt       time.Time         `json:"expires_at"`
 }
 
-// CreateSandboxRequest supports both direct config and template-based creation
+// CreateSandboxRequest represents a request to create a sandbox from a template.
+// All sandboxes must be created from a template.
 type CreateSandboxRequest struct {
-	// Direct configuration (original way)
-	Image  string            `json:"image"`
-	CPU    string            `json:"cpu"`
-	Memory string            `json:"memory"`
-	TTL    int               `json:"ttl"`
-	Env    map[string]string `json:"env"`
-
-	// Template-based creation (new way)
-	Template        string            `json:"template"`
+	// Template is required - all sandboxes must be created from a template
+	Template        string            `json:"template" binding:"required"`
 	TemplateVersion int               `json:"templateVersion"`
 	Overrides       *SandboxOverrides `json:"overrides"`
 }
@@ -48,11 +42,6 @@ type SandboxOverrides struct {
 	Memory string            `json:"memory,omitempty"`
 	TTL    int               `json:"ttl,omitempty"`
 	Env    map[string]string `json:"env,omitempty"`
-}
-
-// IsTemplateRequest returns true if this is a template-based request
-func (r *CreateSandboxRequest) IsTemplateRequest() bool {
-	return r.Template != ""
 }
 
 type ExecRequest struct {

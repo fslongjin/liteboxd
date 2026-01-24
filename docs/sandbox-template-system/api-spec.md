@@ -400,29 +400,15 @@ POST /templates/{name}/rollback
 
 ## 扩展的沙箱 API
 
-### 9. 从模版创建沙箱
+### 9. 从模版创建沙箱 (强制)
 
-扩展现有的创建沙箱 API，支持从模版创建。
+**重要**: 所有沙箱必须通过模版创建，不再支持直接配置方式。
 
 ```http
 POST /sandboxes
 ```
 
-**方式一: 直接配置 (现有方式)**
-
-```json
-{
-  "image": "python:3.11-slim",
-  "cpu": "500m",
-  "memory": "512Mi",
-  "ttl": 3600,
-  "env": {
-    "DEBUG": "true"
-  }
-}
-```
-
-**方式二: 从模版创建 (新增)**
+**请求体**:
 
 ```json
 {
@@ -444,7 +430,7 @@ POST /sandboxes
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| template | string | 是* | 模版名称 (*与 image 二选一) |
+| template | string | **是** | 模版名称 |
 | templateVersion | integer | 否 | 模版版本，默认使用最新版本 |
 | overrides | object | 否 | 覆盖配置 |
 | overrides.cpu | string | 否 | 覆盖 CPU 限制 |

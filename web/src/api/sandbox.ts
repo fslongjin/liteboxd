@@ -19,12 +19,7 @@ export interface Sandbox {
 }
 
 export interface CreateSandboxRequest {
-  image?: string
-  cpu?: string
-  memory?: string
-  ttl?: number
-  env?: Record<string, string>
-  template?: string
+  template: string  // required
   templateVersion?: number
   overrides?: {
     cpu?: string

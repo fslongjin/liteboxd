@@ -2,12 +2,7 @@
   <div class="sandbox-list">
     <t-card title="Sandboxes" :bordered="false">
       <template #actions>
-        <t-space>
-          <t-button theme="default" variant="outline" @click="showTemplateSelect = true">
-            从模板创建
-          </t-button>
-          <t-button theme="primary" @click="showCreateDialog = true"> 自定义创建 </t-button>
-        </t-space>
+        <t-button theme="primary" @click="showTemplateSelect = true"> 创建沙箱 </t-button>
       </template>
 
       <t-table :data="sandboxes" :columns="columns" :loading="loading" row-key="id" hover>
@@ -46,33 +41,10 @@
       </t-table>
     </t-card>
 
-    <!-- Custom Create Dialog -->
-    <t-dialog
-      v-model:visible="showCreateDialog"
-      header="创建 Sandbox"
-      :confirm-btn="{ content: '创建', loading: creating }"
-      @confirm="createSandbox"
-    >
-      <t-form :data="createForm" :rules="formRules" ref="formRef">
-        <t-form-item label="镜像" name="image">
-          <t-input v-model="createForm.image" placeholder="如：python:3.11-slim" />
-        </t-form-item>
-        <t-form-item label="CPU">
-          <t-input v-model="createForm.cpu" placeholder="如：500m" />
-        </t-form-item>
-        <t-form-item label="内存">
-          <t-input v-model="createForm.memory" placeholder="如：512Mi" />
-        </t-form-item>
-        <t-form-item label="TTL (秒)">
-          <t-input-number v-model="createForm.ttl" :min="60" :max="86400" />
-        </t-form-item>
-      </t-form>
-    </t-dialog>
-
     <!-- Template Select Dialog -->
     <t-dialog
       v-model:visible="showTemplateSelect"
-      header="从模板创建 Sandbox"
+      header="创建沙箱"
       width="700px"
       :confirm-btn="{ content: '创建', loading: creating }"
       @confirm="createFromTemplate"
@@ -158,30 +130,17 @@ const router = useRouter()
 const sandboxes = ref<Sandbox[]>([])
 const templates = ref<Template[]>([])
 const loading = ref(false)
-const showCreateDialog = ref(false)
 const showTemplateSelect = ref(false)
 const creating = ref(false)
-const formRef = ref()
 const templateSearch = ref('')
 const selectedTemplate = ref('')
 const templatesLoading = ref(false)
-
-const createForm = ref<CreateSandboxRequest>({
-  image: 'python:3.11-slim',
-  cpu: '500m',
-  memory: '512Mi',
-  ttl: 3600,
-})
 
 const templateOverrides = ref({
   cpu: '',
   memory: '',
   ttl: 0,
 })
-
-const formRules = {
-  image: [{ required: true, message: '请输入镜像名称' }],
-}
 
 const columns = [
   { colKey: 'id', title: 'ID', width: 120 },
@@ -291,23 +250,6 @@ const searchTemplates = async () => {
   }
 }
 
-const createSandbox = async () => {
-  const valid = await formRef.value?.validate()
-  if (valid !== true) return
-
-  creating.value = true
-  try {
-    await sandboxApi.create(createForm.value)
-    MessagePlugin.success('创建成功')
-    showCreateDialog.value = false
-    loadSandboxes()
-  } catch (err: any) {
-    MessagePlugin.error('创建失败: ' + (err.response?.data?.error || err.message))
-  } finally {
-    creating.value = false
-  }
-}
-
 const createFromTemplate = async () => {
   if (!selectedTemplate.value) {
     MessagePlugin.warning('请选择模板')
@@ -388,14 +330,11 @@ const stopRefresh = () => {
   }
 }
 
-// Pause sandbox refresh when dialogs are open, and reload templates when opening template select
-watch([showCreateDialog, showTemplateSelect], ([create, template]) => {
-  if (create || template) {
+// Pause sandbox refresh when dialog is open, and reload templates when opening
+watch(showTemplateSelect, (isOpen) => {
+  if (isOpen) {
     stopRefresh()
-    // Reload templates when opening template selection dialog
-    if (template) {
-      loadTemplates()
-    }
+    loadTemplates()
   } else {
     startRefresh()
   }
