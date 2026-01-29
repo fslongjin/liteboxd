@@ -1,0 +1,8 @@
+# LiteBoxd Internet Access Policy
+# 使用 kubectl apply -k deploy/network-policies/internet 应用互联网访问策略
+
+namespace: liteboxd
+
+resources:
+  - ../base
+  - allow-internet-egress.yaml

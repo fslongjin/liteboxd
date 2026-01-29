@@ -1,0 +1,26 @@
+# 拒绝访问 K3s API Server 和内部服务
+# 配合 default-deny-all 使用，防止沙箱攻击集群基础设施
+# 由于 default-deny-all 已经拒绝所有流量，这里只需要不添加允许规则即可
+# 此文档作为记录，说明设计意图
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deny-k8s-api
+  namespace: liteboxd
+spec:
+  podSelector:
+    matchLabels:
+      app: liteboxd
+  policyTypes:
+  - Egress
+  egress:
+  # 仅允许 DNS（在 allow-dns.yaml 中定义）
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          k8s-app: kube-dns
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53

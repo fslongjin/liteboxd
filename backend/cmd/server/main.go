@@ -48,6 +48,15 @@ func main() {
 	}
 	fmt.Println("Namespace 'liteboxd' ensured")
 
+	// Ensure network policies are applied
+	netPolicyMgr := k8s.NewNetworkPolicyManager(k8sClient)
+	if err := netPolicyMgr.EnsureDefaultPolicies(ctx); err != nil {
+		log.Printf("Warning: Failed to ensure network policies: %v", err)
+		log.Println("Network policies may not be properly configured. Cilium may not be installed.")
+	} else {
+		fmt.Println("Network policies ensured")
+	}
+
 	// Create services
 	templateSvc := service.NewTemplateService()
 	prepullSvc := service.NewPrepullService(k8sClient)

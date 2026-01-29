@@ -18,6 +18,12 @@ export interface TemplateSpec {
   startupTimeout?: number
   files?: FileSpec[]
   readinessProbe?: ProbeSpec
+  network?: NetworkSpec
+}
+
+export interface NetworkSpec {
+  allowInternetAccess: boolean
+  allowedDomains?: string[]
 }
 
 export interface FileSpec {

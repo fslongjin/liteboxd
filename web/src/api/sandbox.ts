@@ -16,6 +16,8 @@ export interface Sandbox {
   templateVersion?: number
   created_at: string
   expires_at: string
+  accessToken?: string
+  accessUrl?: string
 }
 
 export interface CreateSandboxRequest {

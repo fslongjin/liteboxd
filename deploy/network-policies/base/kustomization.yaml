@@ -1,0 +1,10 @@
+# LiteBoxd Network Policies
+# 使用 kubectl apply -k deploy/network-policies/base 应用基础策略
+
+namespace: liteboxd
+
+resources:
+  - default-deny-all.yaml
+  - allow-dns.yaml
+  - deny-k8s-api.yaml
+  - allow-gateway-ingress.yaml

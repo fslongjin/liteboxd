@@ -1,0 +1,14 @@
+# 默认拒绝所有入站和出站流量
+# 这是安全基线：默认拒绝所有流量，然后按需开放
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: liteboxd
+spec:
+  podSelector:
+    matchLabels:
+      app: liteboxd
+  policyTypes:
+  - Ingress
+  - Egress

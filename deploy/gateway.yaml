@@ -1,0 +1,140 @@
+# Gateway Service Deployment
+# This file defines the Kubernetes resources for the gateway service
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: liteboxd-gateway
+  namespace: liteboxd
+spec:
+  selector:
+    app: liteboxd-gateway
+  ports:
+  - port: 8081
+    targetPort: 8081
+    protocol: TCP
+  type: ClusterIP
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: liteboxd-gateway
+  namespace: liteboxd
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: liteboxd-gateway-config
+  namespace: liteboxd
+data:
+  PORT: "8081"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: liteboxd-gateway
+  namespace: liteboxd
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: liteboxd-gateway
+  template:
+    metadata:
+      labels:
+        app: liteboxd-gateway
+    spec:
+      serviceAccountName: liteboxd-gateway
+      containers:
+      - name: gateway
+        image: liteboxd/gateway:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8081
+          name: http
+        env:
+        - name: PORT
+          valueFrom:
+            configMapKeyRef:
+              name: liteboxd-gateway-config
+              key: PORT
+        - name: KUBECONFIG
+          value: /kubeconfig/config
+        volumeMounts:
+        - name: kubeconfig
+          mountPath: /kubeconfig
+          readOnly: true
+        resources:
+          requests:
+            cpu:    100m
+            memory: 128Mi
+          limits:
+            cpu:    500m
+            memory: 512Mi
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8081
+          initialDelaySeconds: 10
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8081
+          initialDelaySeconds: 5
+          periodSeconds: 10
+      volumes:
+      - name: kubeconfig
+        secret:
+          secretName: liteboxd-kubeconfig
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: gateway-to-sandboxes
+  namespace: liteboxd
+spec:
+  podSelector:
+    matchLabels:
+      app: liteboxd-gateway
+  policyTypes:
+  - Egress
+  egress:
+  # Allow gateway to reach sandbox pods
+  - to:
+    - podSelector:
+        matchLabels:
+          app: liteboxd
+    ports:
+    - protocol: TCP
+      port: 3000-65535
+  # Allow gateway to reach DNS
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          k8s-app: kube-dns
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+  # Allow gateway to reach K8s API
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+    ports:
+    - protocol: TCP
+      port: 443
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: liteboxd-gateway
+  namespace: liteboxd
+spec:
+  selector:
+    matchLabels:
+      app: liteboxd-gateway
+  maxUnavailable: 0
+  minAvailable: 1

@@ -127,6 +127,12 @@
         <t-form-item label="自动预拉取">
           <t-switch v-model="form.autoPrepull" />
         </t-form-item>
+        <t-form-item label="允许外网访问">
+          <t-switch v-model="form.spec.network.allowInternetAccess" />
+          <t-tooltip content="开启后，允许沙箱出站访问公网（HTTP/HTTPS）">
+            <t-icon name="help-circle" style="margin-left: 8px; color: var(--td-text-color-placeholder)" />
+          </t-tooltip>
+        </t-form-item>
       </t-form>
     </t-dialog>
 
@@ -187,7 +193,7 @@
 import { ref, computed, watch, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { MessagePlugin, DialogPlugin } from 'tdesign-vue-next'
-import { AddIcon, ImportIcon, ExportIcon, ChevronDownIcon } from 'tdesign-icons-vue-next'
+import { AddIcon, ImportIcon, ExportIcon, ChevronDownIcon, HelpCircleIcon } from 'tdesign-icons-vue-next'
 import {
   templateApi,
   type Template,
@@ -220,6 +226,7 @@ const form = ref<CreateTemplateRequest & { autoPrepull?: boolean }>({
     image: 'python:3.11-slim',
     resources: { cpu: '500m', memory: '512Mi' },
     ttl: 3600,
+    network: { allowInternetAccess: false },
     env: {},
     startupTimeout: 300,
   },
@@ -347,10 +354,14 @@ const editTemplate = (tmpl: Template) => {
     displayName: tmpl.displayName,
     description: tmpl.description,
     tags: tmpl.tags || [],
-    spec: tmpl.spec || {
-      image: '',
-      resources: { cpu: '', memory: '' },
-      ttl: 3600,
+    spec: {
+      image: tmpl.spec?.image || '',
+      resources: tmpl.spec?.resources || { cpu: '', memory: '' },
+      ttl: tmpl.spec?.ttl || 3600,
+      network: tmpl.spec?.network || { allowInternetAccess: false },
+      env: tmpl.spec?.env || {},
+      startupScript: tmpl.spec?.startupScript || '',
+      startupTimeout: tmpl.spec?.startupTimeout || 300,
     },
     autoPrepull: false,
   }

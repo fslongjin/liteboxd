@@ -25,6 +25,10 @@ type Sandbox struct {
 	TemplateVersion int               `json:"templateVersion,omitempty"`
 	CreatedAt       time.Time         `json:"created_at"`
 	ExpiresAt       time.Time         `json:"expires_at"`
+
+	// Network access fields
+	AccessToken string `json:"accessToken,omitempty"` // Access token for inbound requests
+	AccessURL   string `json:"accessUrl,omitempty"`   // Base URL for accessing the sandbox
 }
 
 // CreateSandboxRequest represents a request to create a sandbox from a template.
@@ -42,6 +46,7 @@ type SandboxOverrides struct {
 	Memory string            `json:"memory,omitempty"`
 	TTL    int               `json:"ttl,omitempty"`
 	Env    map[string]string `json:"env,omitempty"`
+	// Note: Network configuration cannot be overridden, it must be set in the template spec
 }
 
 type ExecRequest struct {

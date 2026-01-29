@@ -43,6 +43,7 @@ type TemplateSpec struct {
 	StartupTimeout int               `json:"startupTimeout,omitempty"`
 	Files          []FileSpec        `json:"files,omitempty"`
 	ReadinessProbe *ProbeSpec        `json:"readinessProbe,omitempty"`
+	Network        *NetworkSpec      `json:"network,omitempty"`
 }
 
 // ResourceSpec defines resource limits

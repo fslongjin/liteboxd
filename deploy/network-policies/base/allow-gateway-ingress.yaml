@@ -1,0 +1,29 @@
+# 允许来自网关服务的入站流量
+# 网关服务是外部流量访问沙箱的唯一入口
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-gateway-ingress
+  namespace: liteboxd
+spec:
+  podSelector:
+    matchLabels:
+      app: liteboxd
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    # 允许来自网关服务的流量
+    - podSelector:
+        matchLabels:
+          app: liteboxd-gateway
+    # 也允许来自同一命名空间的网关 Service
+    - namespaceSelector:
+        matchLabels:
+          name: liteboxd
+      podSelector:
+        matchLabels:
+          app: liteboxd-gateway
+    ports:
+    - protocol: TCP
+      port: 3000-65535  # 允许所有高端口

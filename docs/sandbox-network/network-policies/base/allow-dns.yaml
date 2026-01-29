@@ -1,0 +1,24 @@
+# 允许 DNS 查询
+# 沙箱需要访问 CoreDNS 进行域名解析
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns
+  namespace: liteboxd
+spec:
+  podSelector:
+    matchLabels:
+      app: liteboxd
+  policyTypes:
+  - Egress
+  egress:
+  - to:
+    # 允许访问 kube-system 命名空间中的 CoreDNS
+    - namespaceSelector:
+        matchLabels:
+          k8s-app: kube-dns
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53

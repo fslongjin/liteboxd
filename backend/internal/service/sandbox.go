@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"os"
 	"strconv"
 	"time"
 
@@ -70,7 +71,10 @@ func (s *SandboxService) Create(ctx context.Context, req *model.CreateSandboxReq
 		startupTimeout = 300 // default 5 minutes
 	}
 
-	// Apply overrides
+	// Network config from template (cannot be overridden)
+	networkConfig := spec.Network
+
+	// Apply overrides (network configuration is NOT allowed to be overridden)
 	if req.Overrides != nil {
 		if req.Overrides.CPU != "" {
 			cpu = req.Overrides.CPU
@@ -129,6 +133,15 @@ func (s *SandboxService) Create(ctx context.Context, req *model.CreateSandboxReq
 		"liteboxd.io/template-version": strconv.Itoa(templateVersion),
 	}
 
+	// Convert model.NetworkSpec to k8s.NetworkSpec
+	var k8sNetwork *k8s.NetworkSpec
+	if networkConfig != nil {
+		k8sNetwork = &k8s.NetworkSpec{
+			AllowInternetAccess: networkConfig.AllowInternetAccess,
+			AllowedDomains:      networkConfig.AllowedDomains,
+		}
+	}
+
 	opts := k8s.CreatePodOptions{
 		ID:             id,
 		Image:          image,
@@ -140,6 +153,7 @@ func (s *SandboxService) Create(ctx context.Context, req *model.CreateSandboxReq
 		StartupFiles:   files,
 		ReadinessProbe: probe,
 		Annotations:    annotations,
+		Network:        k8sNetwork,
 	}
 
 	pod, err := s.k8sClient.CreatePod(ctx, opts)
@@ -147,9 +161,21 @@ func (s *SandboxService) Create(ctx context.Context, req *model.CreateSandboxReq
 		return nil, fmt.Errorf("failed to create pod: %w", err)
 	}
 
+	// Get access token from pod annotations
+	accessToken := pod.Annotations[k8s.AnnotationAccessToken]
+
+	// Generate access URL
+	gatewayURL := os.Getenv("GATEWAY_URL")
+	if gatewayURL == "" {
+		gatewayURL = "http://localhost:8080" // Default for development
+	}
+	accessURL := fmt.Sprintf("%s/api/v1/sandbox/%s", gatewayURL, id)
+
 	sandbox := s.podToSandbox(pod)
 	sandbox.Template = req.Template
 	sandbox.TemplateVersion = templateVersion
+	sandbox.AccessToken = accessToken
+	sandbox.AccessURL = accessURL
 
 	// Run post-creation tasks asynchronously (wait for ready, upload files, exec startup script)
 	go func() {
@@ -194,7 +220,17 @@ func (s *SandboxService) Get(ctx context.Context, id string) (*model.Sandbox, er
 	if err != nil {
 		return nil, fmt.Errorf("failed to get pod: %w", err)
 	}
-	return s.podToSandbox(pod), nil
+
+	sandbox := s.podToSandbox(pod)
+
+	// Add access URL to get response
+	gatewayURL := os.Getenv("GATEWAY_URL")
+	if gatewayURL == "" {
+		gatewayURL = "http://localhost:8080"
+	}
+	sandbox.AccessURL = fmt.Sprintf("%s/api/v1/sandbox/%s", gatewayURL, id)
+
+	return sandbox, nil
 }
 
 func (s *SandboxService) List(ctx context.Context) (*model.SandboxListResponse, error) {
@@ -332,15 +368,19 @@ func (s *SandboxService) podToSandbox(pod *corev1.Pod) *model.Sandbox {
 		}
 	}
 
+	// Get access token from annotations
+	accessToken := pod.Annotations[k8s.AnnotationAccessToken]
+
 	return &model.Sandbox{
-		ID:        sandboxID,
-		Image:     image,
-		CPU:       cpu,
-		Memory:    memory,
-		TTL:       ttl,
-		Status:    convertPodStatus(pod),
-		CreatedAt: createdAt,
-		ExpiresAt: expiresAt,
+		ID:          sandboxID,
+		Image:       image,
+		CPU:         cpu,
+		Memory:      memory,
+		TTL:         ttl,
+		Status:      convertPodStatus(pod),
+		CreatedAt:   createdAt,
+		ExpiresAt:   expiresAt,
+		AccessToken: accessToken,
 	}
 }
 

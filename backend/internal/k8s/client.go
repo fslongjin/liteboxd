@@ -4,6 +4,8 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -58,6 +60,10 @@ func NewClient(kubeconfigPath string) (*Client, error) {
 	}, nil
 }
 
+func (c *Client) GetConfig() *rest.Config {
+	return c.config
+}
+
 func (c *Client) EnsureNamespace(ctx context.Context) error {
 	_, err := c.clientset.CoreV1().Namespaces().Get(ctx, SandboxNamespace, metav1.GetOptions{})
 	if err == nil {
@@ -84,6 +90,13 @@ type CreatePodOptions struct {
 	StartupScript  string     // Startup script to execute after pod is ready
 	StartupFiles   []FileSpec // Files to upload before startup script
 	ReadinessProbe *ProbeSpec // Readiness probe configuration
+	Network        *NetworkSpec // Network configuration
+}
+
+// NetworkSpec defines the network configuration for a pod
+type NetworkSpec struct {
+	AllowInternetAccess bool     // Enable outbound internet access
+	AllowedDomains      []string // Optional domain whitelist (future)
 }
 
 // FileSpec defines a file to be uploaded to the sandbox
@@ -120,24 +133,36 @@ func (c *Client) CreatePod(ctx context.Context, opts CreatePodOptions) (*corev1.
 
 	var runAsUser int64 = 1000
 
+	// Generate access token for sandbox network access
+	accessToken := generateAccessToken()
+
 	// Build annotations
 	annotations := map[string]string{
-		AnnotationTTL:       fmt.Sprintf("%d", opts.TTL),
-		AnnotationCreatedAt: time.Now().UTC().Format(time.RFC3339),
+		AnnotationTTL:         fmt.Sprintf("%d", opts.TTL),
+		AnnotationCreatedAt:    time.Now().UTC().Format(time.RFC3339),
+		AnnotationAccessToken:  accessToken,
 	}
 	// Merge custom annotations
 	for k, v := range opts.Annotations {
 		annotations[k] = v
 	}
 
+	// Build labels
+	labels := map[string]string{
+		"app":          LabelApp,
+		LabelSandboxID: opts.ID,
+	}
+
+	// Add internet-access label if network config specifies it
+	if opts.Network != nil && opts.Network.AllowInternetAccess {
+		labels[LabelInternetAccess] = "true"
+	}
+
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      podName,
-			Namespace: SandboxNamespace,
-			Labels: map[string]string{
-				"app":          LabelApp,
-				LabelSandboxID: opts.ID,
-			},
+			Name:        podName,
+			Namespace:   SandboxNamespace,
+			Labels:      labels,
 			Annotations: annotations,
 		},
 		Spec: corev1.PodSpec{
@@ -709,4 +734,52 @@ func (c *Client) UploadFiles(ctx context.Context, sandboxID string, files []File
 		}
 	}
 	return nil
+}
+
+// generateAccessToken generates a random access token for sandbox network access
+func generateAccessToken() string {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		// Fallback to time-based token if crypto rand fails
+		return fmt.Sprintf("%d-%s", time.Now().UnixNano(), randomString(16))
+	}
+	return hex.EncodeToString(b)
+}
+
+// randomString generates a random hex string
+func randomString(length int) string {
+	b := make([]byte, length)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)[:length]
+}
+
+// GetPodIP returns the IP address of a sandbox pod
+func (c *Client) GetPodIP(ctx context.Context, sandboxID string) (string, error) {
+	podName := fmt.Sprintf("sandbox-%s", sandboxID)
+	pod, err := c.clientset.CoreV1().Pods(SandboxNamespace).Get(ctx, podName, metav1.GetOptions{})
+	if err != nil {
+		return "", fmt.Errorf("failed to get pod: %w", err)
+	}
+
+	if len(pod.Status.PodIP) == 0 {
+		return "", fmt.Errorf("pod IP not available")
+	}
+
+	return pod.Status.PodIP, nil
+}
+
+// GetPodAccessToken retrieves the access token from a pod's annotations
+func (c *Client) GetPodAccessToken(ctx context.Context, sandboxID string) (string, error) {
+	podName := fmt.Sprintf("sandbox-%s", sandboxID)
+	pod, err := c.clientset.CoreV1().Pods(SandboxNamespace).Get(ctx, podName, metav1.GetOptions{})
+	if err != nil {
+		return "", fmt.Errorf("failed to get pod: %w", err)
+	}
+
+	token, ok := pod.Annotations[AnnotationAccessToken]
+	if !ok {
+		return "", fmt.Errorf("access token not found")
+	}
+
+	return token, nil
 }

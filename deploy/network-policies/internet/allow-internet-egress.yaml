@@ -1,0 +1,40 @@
+# 允许互联网访问
+# 此策略仅应用于标记了 internet-access: "true" 的沙箱
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-internet-egress
+  namespace: liteboxd
+spec:
+  podSelector:
+    matchLabels:
+      app: liteboxd
+      internet-access: "true"
+  policyTypes:
+  - Egress
+  egress:
+  # 允许访问互联网（排除私有 IP 段）
+  - to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+        except:
+        - 10.0.0.0/8      # RFC 1918 - 私有网络
+        - 172.16.0.0/12   # RFC 1918 - 私有网络
+        - 192.168.0.0/16  # RFC 1918 - 私有网络
+        - 127.0.0.0/8     # 本地回环
+        - 169.254.0.0/16  # 链路本地
+    ports:
+    - protocol: TCP
+      port: 443  # HTTPS
+    - protocol: TCP
+      port: 80   # HTTP
+  # 继续允许 DNS
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          k8s-app: kube-dns
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
