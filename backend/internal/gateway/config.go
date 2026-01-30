@@ -36,10 +36,10 @@ func LoadConfig() *Config {
 	useK8sProxy := os.Getenv("DEV_USE_K8S_PROXY") == "true"
 
 	return &Config{
-		Port:           port,
-		KubeconfigPath: kubeconfigPath,
-		RequestTimeout: 5 * time.Minute,
+		Port:            port,
+		KubeconfigPath:  kubeconfigPath,
+		RequestTimeout:  5 * time.Minute,
 		ShutdownTimeout: 30 * time.Second,
-		UseK8sProxy:    useK8sProxy,
+		UseK8sProxy:     useK8sProxy,
 	}
 }

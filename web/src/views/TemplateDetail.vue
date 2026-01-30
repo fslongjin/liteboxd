@@ -45,6 +45,12 @@
               <t-descriptions-item label="镜像">
                 <span class="mono">{{ template?.spec?.image }}</span>
               </t-descriptions-item>
+              <t-descriptions-item label="Command" v-if="template?.spec?.command?.length">
+                <span class="mono">{{ template.spec.command.join(' ') }}</span>
+              </t-descriptions-item>
+              <t-descriptions-item label="Args" v-if="template?.spec?.args?.length">
+                <span class="mono">{{ template.spec.args.join(' ') }}</span>
+              </t-descriptions-item>
               <t-descriptions-item label="CPU">{{
                 template?.spec?.resources?.cpu
               }}</t-descriptions-item>

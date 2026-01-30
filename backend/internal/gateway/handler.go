@@ -3,8 +3,8 @@ package gateway
 import (
 	"net/http"
 
-	"github.com/gin-gonic/gin"
 	"github.com/fslongjin/liteboxd/backend/internal/k8s"
+	"github.com/gin-gonic/gin"
 )
 
 // Service is the gateway service

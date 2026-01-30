@@ -8,6 +8,10 @@ const api = axios.create({
 // Template types
 export interface TemplateSpec {
   image: string
+  /** 覆盖容器命令；留空则使用镜像默认 (OCI CMD) */
+  command?: string[]
+  /** 覆盖容器参数；留空则使用镜像默认 */
+  args?: string[]
   resources: {
     cpu: string
     memory: string

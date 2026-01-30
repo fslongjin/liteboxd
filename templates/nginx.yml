@@ -1,0 +1,36 @@
+# 内置沙箱模板：Nginx Web 服务器
+# 用于快速启动一个提供 HTTP 服务的 Nginx 沙箱，可通过网关访问默认欢迎页或自定义静态内容。
+apiVersion: liteboxd/v1
+kind: SandboxTemplate
+metadata:
+    name: nginx
+    displayName: "Nginx"
+    description: "Nginx Web 服务器沙箱，提供 HTTP 静态服务，适合快速验证 Web 访问或托管静态页面。"
+    tags:
+        - web
+        - http
+        - nginx
+spec:
+    image: nginx:alpine
+    resources:
+        cpu: 500m
+        memory: 256Mi
+    ttl: 3600
+    env: {}
+    startupscript: ""
+    startuptimeout: 300
+    files: []
+    readinessprobe:
+        exec:
+            command:
+                - wget
+                - -q
+                - -O
+                - /dev/null
+                - http://127.0.0.1/
+        initialDelaySeconds: 3
+        periodSeconds: 5
+        failureThreshold: 3
+    network:
+        allowinternetaccess: true
+        alloweddomains: []
