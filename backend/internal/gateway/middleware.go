@@ -9,8 +9,8 @@ import (
 
 const (
 	authorizationHeader = "X-Access-Token"
-	sandboxIDParam     = "sandbox"
-	portParam          = "port"
+	sandboxIDParam      = "sandbox"
+	portParam           = "port"
 )
 
 // AuthMiddleware creates authentication middleware for the gateway

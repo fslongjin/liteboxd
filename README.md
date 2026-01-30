@@ -9,9 +9,15 @@ A lightweight K8s sandbox system inspired by e2b, designed to run on k3s.
 - File upload/download
 - Automatic TTL-based cleanup
 - Web UI for easy management
-- **Network isolation with Cilium** (default deny-all egress)
+- **Network isolation with Cilium** (ingress and egress control)
 - **Token-based sandbox access** via gateway service
 - **Configurable internet access** per template
+
+## Screenshots
+
+| Sandbox List | Template Management |
+|:---:|:---:|
+| ![Sandbox List](docs/assests/screenshot-260130.png) | ![Template Management](docs/assests/screenshot-260130-template.png) |
 
 ## Quick Start
 
@@ -23,15 +29,14 @@ cd backend && go mod tidy
 
 ### 1. Prepare Remote K3s + Cilium
 
-在独立机器上部署 K3s 和 Cilium，并确保本机可以访问该集群。
-要求不要在 Docker 容器内安装 K3s。
+Deploy K3s and Cilium on a separate machine, and ensure this host can access the cluster.
+Do not install K3s inside a Docker container.
 
-参考文档：
-https://docs.cilium.io/en/stable/installation/k3s/
+See: https://docs.cilium.io/en/stable/installation/k3s/
 
 ### 2. Configure Kubeconfig
 
-将远程机器上的 kubeconfig 拷贝到本机，并设置环境变量：
+Copy the kubeconfig from the remote machine to this host and set the environment variable:
 
 ```bash
 export KUBECONFIG=~/.kube/config

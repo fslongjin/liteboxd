@@ -980,6 +980,16 @@ components:
         image:
           type: string
           example: "python:3.11-slim"
+        command:
+          type: array
+          items:
+            type: string
+          description: Override container command; omit to use image default (OCI CMD)
+        args:
+          type: array
+          items:
+            type: string
+          description: Override container args; omit to use image default
         resources:
           type: object
           properties:

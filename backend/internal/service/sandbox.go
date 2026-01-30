@@ -145,6 +145,8 @@ func (s *SandboxService) Create(ctx context.Context, req *model.CreateSandboxReq
 	opts := k8s.CreatePodOptions{
 		ID:             id,
 		Image:          image,
+		Command:        spec.Command,
+		Args:           spec.Args,
 		CPU:            cpu,
 		Memory:         memory,
 		TTL:            ttl,
@@ -185,8 +187,18 @@ func (s *SandboxService) Create(ctx context.Context, req *model.CreateSandboxReq
 	return sandbox, nil
 }
 
-// runPostCreationTasks runs tasks after pod creation in the background
+// runPostCreationTasks runs tasks after pod creation in the background.
+// Order: startup script first (so services like nginx can listen), then wait for ready (probe), then upload files.
 func (s *SandboxService) runPostCreationTasks(ctx context.Context, id string, probe *k8s.ProbeSpec, files []k8s.FileSpec, startupScript string, startupTimeout int) {
+	// Execute startup script first if specified (e.g. start nginx), so readiness probe can succeed
+	if startupScript != "" {
+		execCtx, execCancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer execCancel()
+		if _, err := s.k8sClient.Exec(execCtx, id, []string{"sh", "-c", startupScript}); err != nil {
+			fmt.Printf("Post-creation: startup script failed for pod %s: %v\n", id, err)
+		}
+	}
+
 	// Wait for pod to be ready (with custom probe if specified)
 	readyCtx, cancel := context.WithTimeout(ctx, time.Duration(startupTimeout)*time.Second)
 	defer cancel()
@@ -200,15 +212,6 @@ func (s *SandboxService) runPostCreationTasks(ctx context.Context, id string, pr
 	if len(files) > 0 {
 		if err := s.k8sClient.UploadFiles(ctx, id, files); err != nil {
 			fmt.Printf("Post-creation: failed to upload files to pod %s: %v\n", id, err)
-		}
-	}
-
-	// Execute startup script if specified
-	if startupScript != "" {
-		execCtx, execCancel := context.WithTimeout(context.Background(), 60*time.Second)
-		defer execCancel()
-		if _, err := s.k8sClient.Exec(execCtx, id, []string{"sh", "-c", startupScript}); err != nil {
-			fmt.Printf("Post-creation: startup script failed for pod %s: %v\n", id, err)
 		}
 	}
 

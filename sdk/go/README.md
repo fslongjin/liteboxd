@@ -67,7 +67,7 @@ sdk/go/
 ├── template.go        # Template service
 ├── prepull.go         # Prepull service
 ├── import_export.go   # Import/Export service
-└── types*.go          # Data types
+└── types.go           # Data types (alias backend/pkg/model)
 ```
 
 ## Documentation

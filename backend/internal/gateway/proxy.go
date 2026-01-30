@@ -7,10 +7,10 @@ import (
 	"net/url"
 	"strings"
 	"time"
-    "crypto/tls"
 
 	"github.com/fslongjin/liteboxd/backend/internal/k8s"
 	"github.com/gin-gonic/gin"
+	"k8s.io/client-go/rest"
 )
 
 // ProxyHandler handles proxying requests to sandbox pods
@@ -25,30 +25,30 @@ func (s *Service) ProxyHandler(c *gin.Context) {
 		// Use K8s API Server proxy
 		// URL format: /api/v1/namespaces/{namespace}/pods/{name}:{port}/proxy/{path}
 		podName := fmt.Sprintf("sandbox-%s", sandboxID)
-		
+
 		// Get K8s REST config
 		k8sConfig := s.k8sClient.GetConfig()
 		host := k8sConfig.Host
-		
+
 		targetURL, _ = url.Parse(host)
-		
+
 		proxy = httputil.NewSingleHostReverseProxy(targetURL)
-		
+
 		originalDirector := proxy.Director
 		proxy.Director = func(req *http.Request) {
 			originalDirector(req)
-			
+
 			// Set K8s Authentication
 			if k8sConfig.BearerToken != "" {
 				req.Header.Set("Authorization", "Bearer "+k8sConfig.BearerToken)
 			}
-			// Note: If using client certs (e.g. minikube), we need to handle that in Transport, 
+			// Note: If using client certs (e.g. minikube), we need to handle that in Transport,
 			// but here we focus on Token auth which is common for remote clusters (ServiceAccount or Token).
 			// For full support we might need to copy Transport from k8s client, but simpler approach first.
 
 			// Construct proxy path
 			// Target: /api/v1/namespaces/liteboxd/pods/sandbox-{id}:{port}/proxy/{path}
-			
+
 			// Extract path after /port/{port}
 			realPath := ""
 			parts := strings.Split(req.URL.Path, "/")
@@ -67,43 +67,35 @@ func (s *Service) ProxyHandler(c *gin.Context) {
 			}
 
 			// K8s API Proxy path
-			k8sProxyPath := fmt.Sprintf("/api/v1/namespaces/%s/pods/%s:%s/proxy%s", 
+			k8sProxyPath := fmt.Sprintf("/api/v1/namespaces/%s/pods/%s:%s/proxy%s",
 				k8s.SandboxNamespace, podName, port, realPath)
-				
+
 			req.URL.Path = k8sProxyPath
-			
+
 			// Strip prefix logic is handled by constructing the new path directly above
-			
+
 			// Update host to K8s API host
 			req.Host = targetURL.Host
-			
+
 			// Preserve X-Access-Token header when forwarding (K8s proxy forwards headers)
 			// But wait, K8s proxy might conflict if we send Authorization header for K8s AND X-Access-Token for App?
 			// X-Access-Token is custom, so it should pass through.
 		}
-		
-		// Custom Transport for K8s API (TLS handling)
-		tlsConfig := &tls.Config{
-			InsecureSkipVerify: k8sConfig.TLSClientConfig.Insecure,
-		}
-		if len(k8sConfig.TLSClientConfig.CAData) > 0 {
-			// In a real implementation we would parse CAData, but for "Dev Mode" Insecure might be acceptable 
-			// or we assume system CA + Insecure. 
-			// For simplicity in this dev feature, let's respect the Insecure flag.
-		}
 
-		proxy.Transport = &http.Transport{
-			Proxy:                 http.ProxyFromEnvironment,
-			TLSClientConfig:       tlsConfig,
-			MaxIdleConns:          100,
-			IdleConnTimeout:       90 * time.Second,
-			TLSHandshakeTimeout:   10 * time.Second,
-			ExpectContinueTimeout: 1 * time.Second,
+		// 使用 client-go 的 TransportFor，与 k8s 客户端共用同一套 TLS 配置（CA/证书/Insecure），
+		// 避免自建 tls.Config 时未加载 kubeconfig 中的 CA 导致 "certificate signed by unknown authority"。
+		transport, err := rest.TransportFor(k8sConfig)
+		if err != nil {
+			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
+				"error": "failed to build k8s transport: " + err.Error(),
+			})
+			return
 		}
+		proxy.Transport = transport
 
 	} else {
 		// Direct Pod IP mode (Original logic)
-		
+
 		// Get pod IP
 		podIP, err := s.k8sClient.GetPodIP(c.Request.Context(), sandboxID)
 		if err != nil {

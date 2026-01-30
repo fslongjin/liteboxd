@@ -9,9 +9,10 @@ const (
 	ImportStrategyCreateOrUpdate ImportStrategy = "create-or-update"
 )
 
-// ImportTemplatesRequest is the request for importing templates from YAML
+// ImportTemplatesRequest is the request for importing templates from YAML.
+// File is not bound from form (multipart file is read via FormFile in handler).
 type ImportTemplatesRequest struct {
-	File     string         `form:"file" binding:"required"`
+	File     string         `form:"-"` // multipart file, validated via FormFile in handler
 	Strategy ImportStrategy `form:"strategy"`
 	Prepull  bool           `form:"prepull"`
 }

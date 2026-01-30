@@ -36,6 +36,8 @@ type TemplateVersion struct {
 // TemplateSpec defines the specification of a template
 type TemplateSpec struct {
 	Image          string            `json:"image"`
+	Command        []string          `json:"command,omitempty"` // Override container entrypoint; empty = use image default (OCI CMD)
+	Args           []string          `json:"args,omitempty"`    // Override container args; empty = use image default
 	Resources      ResourceSpec      `json:"resources"`
 	TTL            int               `json:"ttl"`
 	Env            map[string]string `json:"env,omitempty"`

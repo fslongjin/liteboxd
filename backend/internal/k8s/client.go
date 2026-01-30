@@ -82,14 +82,16 @@ func (c *Client) EnsureNamespace(ctx context.Context) error {
 type CreatePodOptions struct {
 	ID             string
 	Image          string
+	Command        []string // Override container command; nil/empty = use image default (OCI CMD)
+	Args           []string // Override container args; nil/empty = use image default
 	CPU            string
 	Memory         string
 	TTL            int
 	Env            map[string]string
 	Annotations    map[string]string
-	StartupScript  string     // Startup script to execute after pod is ready
-	StartupFiles   []FileSpec // Files to upload before startup script
-	ReadinessProbe *ProbeSpec // Readiness probe configuration
+	StartupScript  string       // Startup script to execute after pod is ready
+	StartupFiles   []FileSpec   // Files to upload before startup script
+	ReadinessProbe *ProbeSpec   // Readiness probe configuration
 	Network        *NetworkSpec // Network configuration
 }
 
@@ -114,9 +116,9 @@ type ProbeSpec struct {
 	FailureThreshold    int
 }
 
-func (c *Client) CreatePod(ctx context.Context, opts CreatePodOptions) (*corev1.Pod, error) {
-	podName := fmt.Sprintf("sandbox-%s", opts.ID)
-
+// containerWithCommandAndArgs builds the main container; uses image default CMD when opts.Command/Args are empty.
+// UID is not overridden so the image default user is used (e.g. nginx needs to write /var/cache/nginx).
+func containerWithCommandAndArgs(opts CreatePodOptions) corev1.Container {
 	cpuLimit := opts.CPU
 	if cpuLimit == "" {
 		cpuLimit = "500m"
@@ -125,13 +127,43 @@ func (c *Client) CreatePod(ctx context.Context, opts CreatePodOptions) (*corev1.
 	if memLimit == "" {
 		memLimit = "512Mi"
 	}
-
 	var envVars []corev1.EnvVar
 	for k, v := range opts.Env {
 		envVars = append(envVars, corev1.EnvVar{Name: k, Value: v})
 	}
+	container := corev1.Container{
+		Name:            "main",
+		Image:           opts.Image,
+		ImagePullPolicy: corev1.PullIfNotPresent,
+		Env:             envVars,
+		Resources: corev1.ResourceRequirements{
+			Limits: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse(cpuLimit),
+				corev1.ResourceMemory: resource.MustParse(memLimit),
+			},
+			Requests: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse("100m"),
+				corev1.ResourceMemory: resource.MustParse("128Mi"),
+			},
+		},
+		SecurityContext: &corev1.SecurityContext{
+			AllowPrivilegeEscalation: boolPtr(false), // 非特权容器，不提升权限
+		},
+		VolumeMounts: []corev1.VolumeMount{
+			{Name: "workspace", MountPath: "/workspace"},
+		},
+	}
+	if len(opts.Command) > 0 {
+		container.Command = opts.Command
+	}
+	if len(opts.Args) > 0 {
+		container.Args = opts.Args
+	}
+	return container
+}
 
-	var runAsUser int64 = 1000
+func (c *Client) CreatePod(ctx context.Context, opts CreatePodOptions) (*corev1.Pod, error) {
+	podName := fmt.Sprintf("sandbox-%s", opts.ID)
 
 	// Generate access token for sandbox network access
 	accessToken := generateAccessToken()
@@ -139,8 +171,8 @@ func (c *Client) CreatePod(ctx context.Context, opts CreatePodOptions) (*corev1.
 	// Build annotations
 	annotations := map[string]string{
 		AnnotationTTL:         fmt.Sprintf("%d", opts.TTL),
-		AnnotationCreatedAt:    time.Now().UTC().Format(time.RFC3339),
-		AnnotationAccessToken:  accessToken,
+		AnnotationCreatedAt:   time.Now().UTC().Format(time.RFC3339),
+		AnnotationAccessToken: accessToken,
 	}
 	// Merge custom annotations
 	for k, v := range opts.Annotations {
@@ -186,36 +218,7 @@ func (c *Client) CreatePod(ctx context.Context, opts CreatePodOptions) (*corev1.
 					Type: corev1.SeccompProfileTypeRuntimeDefault,
 				},
 			},
-			Containers: []corev1.Container{
-				{
-					Name:            "main",
-					Image:           opts.Image,
-					ImagePullPolicy: corev1.PullIfNotPresent,
-					Command:         []string{"sleep", "infinity"},
-					Env:             envVars,
-					Resources: corev1.ResourceRequirements{
-						Limits: corev1.ResourceList{
-							corev1.ResourceCPU:    resource.MustParse(cpuLimit),
-							corev1.ResourceMemory: resource.MustParse(memLimit),
-						},
-						Requests: corev1.ResourceList{
-							corev1.ResourceCPU:    resource.MustParse("100m"),
-							corev1.ResourceMemory: resource.MustParse("128Mi"),
-						},
-					},
-					SecurityContext: &corev1.SecurityContext{
-						AllowPrivilegeEscalation: boolPtr(false),
-						RunAsNonRoot:             boolPtr(true),
-						RunAsUser:                &runAsUser,
-					},
-					VolumeMounts: []corev1.VolumeMount{
-						{
-							Name:      "workspace",
-							MountPath: "/workspace",
-						},
-					},
-				},
-			},
+			Containers: []corev1.Container{containerWithCommandAndArgs(opts)},
 			Volumes: []corev1.Volume{
 				{
 					Name: "workspace",

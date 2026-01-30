@@ -78,62 +78,99 @@
     <t-dialog
       v-model:visible="showCreateDialog"
       :header="isEdit ? '编辑模板' : '新建模板'"
-      width="600px"
+      width="640px"
       :confirm-btn="{ content: isEdit ? '更新' : '创建', loading: saving }"
       @confirm="saveTemplate"
     >
-      <t-form :data="form" :rules="formRules" ref="formRef" label-width="100px">
-        <t-form-item label="名称" name="name">
-          <t-input v-model="form.name" placeholder="英文名称，如: python-dev" :disabled="isEdit" />
-        </t-form-item>
-        <t-form-item label="显示名称" name="displayName">
-          <t-input v-model="form.displayName" placeholder="如: Python 开发环境" />
-        </t-form-item>
-        <t-form-item label="描述" name="description">
-          <t-textarea v-model="form.description" placeholder="模板描述" :maxlength="200" />
-        </t-form-item>
-        <t-form-item label="标签" name="tags">
-          <t-tag-input v-model="form.tags" placeholder="按回车添加标签" clearable />
-        </t-form-item>
-        <t-form-item label="镜像" name="spec.image">
-          <t-input v-model="form.spec.image" placeholder="如: python:3.11-slim" />
-        </t-form-item>
-        <t-form-item label="CPU">
-          <t-input v-model="form.spec.resources.cpu" placeholder="如: 500m" />
-        </t-form-item>
-        <t-form-item label="内存">
-          <t-input v-model="form.spec.resources.memory" placeholder="如: 512Mi" />
-        </t-form-item>
-        <t-form-item label="TTL (秒)">
-          <t-input-number v-model="form.spec.ttl" :min="60" :max="86400" />
-        </t-form-item>
-        <t-form-item label="环境变量">
-          <t-textarea
-            v-model="envText"
-            placeholder="KEY=value&#10;KEY2=value2"
-            :autosize="{ minRows: 2, maxRows: 4 }"
-          />
-        </t-form-item>
-        <t-form-item label="启动脚本">
-          <t-textarea
-            v-model="form.spec.startupScript"
-            placeholder="容器启动后执行的 Shell 脚本"
-            :autosize="{ minRows: 3, maxRows: 8 }"
-          />
-        </t-form-item>
-        <t-form-item label="启动超时(秒)">
-          <t-input-number v-model="form.spec.startupTimeout" :min="30" :max="600" />
-        </t-form-item>
-        <t-form-item label="自动预拉取">
-          <t-switch v-model="form.autoPrepull" />
-        </t-form-item>
-        <t-form-item label="允许外网访问">
-          <t-switch v-model="form.spec.network.allowInternetAccess" />
-          <t-tooltip content="开启后，允许沙箱出站访问公网（HTTP/HTTPS）">
-            <t-icon name="help-circle" style="margin-left: 8px; color: var(--td-text-color-placeholder)" />
-          </t-tooltip>
-        </t-form-item>
-      </t-form>
+      <div class="template-form-scroll">
+        <t-form :data="form" :rules="formRules" ref="formRef" label-width="100px">
+          <t-form-item label="名称" name="name">
+            <t-input
+              v-model="form.name"
+              placeholder="英文名称，如: python-dev"
+              :disabled="isEdit"
+            />
+          </t-form-item>
+          <t-form-item label="显示名称" name="displayName">
+            <t-input v-model="form.displayName" placeholder="如: Python 开发环境" />
+          </t-form-item>
+          <t-form-item label="描述" name="description">
+            <t-textarea v-model="form.description" placeholder="模板描述" :maxlength="200" />
+          </t-form-item>
+          <t-form-item label="标签" name="tags">
+            <t-tag-input v-model="form.tags" placeholder="按回车添加标签" clearable />
+          </t-form-item>
+          <t-form-item label="镜像" name="spec.image">
+            <t-input v-model="form.spec.image" placeholder="如: python:3.11-slim" />
+          </t-form-item>
+          <t-divider>容器入口 (Command / Args)</t-divider>
+          <t-form-item label="Command">
+            <t-tag-input
+              v-model="form.spec.command"
+              placeholder="留空使用镜像默认；每项回车添加"
+              clearable
+            />
+            <t-tooltip content="覆盖容器入口命令；不填则使用镜像 OCI CMD">
+              <t-icon
+                name="help-circle"
+                style="margin-left: 8px; color: var(--td-text-color-placeholder)"
+              />
+            </t-tooltip>
+          </t-form-item>
+          <t-form-item label="Args">
+            <t-tag-input
+              v-model="form.spec.args"
+              placeholder="留空使用镜像默认；每项回车添加"
+              clearable
+            />
+            <t-tooltip content="覆盖容器参数；不填则使用镜像默认">
+              <t-icon
+                name="help-circle"
+                style="margin-left: 8px; color: var(--td-text-color-placeholder)"
+              />
+            </t-tooltip>
+          </t-form-item>
+          <t-divider>资源配置</t-divider>
+          <t-form-item label="CPU">
+            <t-input v-model="form.spec.resources.cpu" placeholder="如: 500m" />
+          </t-form-item>
+          <t-form-item label="内存">
+            <t-input v-model="form.spec.resources.memory" placeholder="如: 512Mi" />
+          </t-form-item>
+          <t-form-item label="TTL (秒)">
+            <t-input-number v-model="form.spec.ttl" :min="60" :max="86400" />
+          </t-form-item>
+          <t-form-item label="环境变量">
+            <t-textarea
+              v-model="envText"
+              placeholder="KEY=value&#10;KEY2=value2"
+              :autosize="{ minRows: 2, maxRows: 4 }"
+            />
+          </t-form-item>
+          <t-form-item label="启动脚本">
+            <t-textarea
+              v-model="form.spec.startupScript"
+              placeholder="容器启动后执行的 Shell 脚本"
+              :autosize="{ minRows: 3, maxRows: 8 }"
+            />
+          </t-form-item>
+          <t-form-item label="启动超时(秒)">
+            <t-input-number v-model="form.spec.startupTimeout" :min="30" :max="600" />
+          </t-form-item>
+          <t-form-item label="自动预拉取">
+            <t-switch v-model="form.autoPrepull" />
+          </t-form-item>
+          <t-form-item label="允许外网访问">
+            <t-switch v-model="networkAllowInternet" />
+            <t-tooltip content="开启后，允许沙箱出站访问公网">
+              <t-icon
+                name="help-circle"
+                style="margin-left: 8px; color: var(--td-text-color-placeholder)"
+              />
+            </t-tooltip>
+          </t-form-item>
+        </t-form>
+      </div>
     </t-dialog>
 
     <!-- Import Dialog -->
@@ -193,7 +230,7 @@
 import { ref, computed, watch, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { MessagePlugin, DialogPlugin } from 'tdesign-vue-next'
-import { AddIcon, ImportIcon, ExportIcon, ChevronDownIcon, HelpCircleIcon } from 'tdesign-icons-vue-next'
+import { AddIcon, ImportIcon, ExportIcon, ChevronDownIcon } from 'tdesign-icons-vue-next'
 import {
   templateApi,
   type Template,
@@ -224,6 +261,8 @@ const form = ref<CreateTemplateRequest & { autoPrepull?: boolean }>({
   tags: [],
   spec: {
     image: 'python:3.11-slim',
+    command: [],
+    args: [],
     resources: { cpu: '500m', memory: '512Mi' },
     ttl: 3600,
     network: { allowInternetAccess: false },
@@ -283,6 +322,14 @@ const envText = computed({
       }
     })
     form.value.spec.env = env
+  },
+})
+
+const networkAllowInternet = computed({
+  get: () => form.value.spec.network?.allowInternetAccess ?? false,
+  set: (v: boolean) => {
+    if (!form.value.spec.network) form.value.spec.network = { allowInternetAccess: false }
+    form.value.spec.network.allowInternetAccess = v
   },
 })
 
@@ -356,6 +403,8 @@ const editTemplate = (tmpl: Template) => {
     tags: tmpl.tags || [],
     spec: {
       image: tmpl.spec?.image || '',
+      command: tmpl.spec?.command ?? [],
+      args: tmpl.spec?.args ?? [],
       resources: tmpl.spec?.resources || { cpu: '', memory: '' },
       ttl: tmpl.spec?.ttl || 3600,
       network: tmpl.spec?.network || { allowInternetAccess: false },
@@ -553,5 +602,11 @@ onMounted(() => {
 .image-text {
   font-family: monospace;
   font-size: 12px;
+}
+
+.template-form-scroll {
+  max-height: 70vh;
+  overflow-y: auto;
+  padding-right: 4px;
 }
 </style>
