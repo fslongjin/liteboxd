@@ -1,0 +1,57 @@
+"""Async import/export service for LiteBoxd SDK."""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
+from ..models import ImportResult, ImportStrategy
+
+if TYPE_CHECKING:
+    from ..async_client import AsyncClient
+
+
+class AsyncImportExportService:
+    """Async template import/export operations service."""
+
+    def __init__(self, client: "AsyncClient") -> None:
+        """Initialize async import/export service."""
+        self._client = client
+
+    async def import_templates(
+        self,
+        yaml_content: bytes | str,
+        *,
+        strategy: ImportStrategy = ImportStrategy.CREATE_OR_UPDATE,
+        auto_prepull: bool = False,
+    ) -> ImportResult:
+        """Import templates from YAML."""
+        if isinstance(yaml_content, str):
+            yaml_content = yaml_content.encode("utf-8")
+
+        files = {
+            "file": ("templates.yaml", yaml_content, "application/x-yaml"),
+        }
+        data: dict[str, Any] = {
+            "strategy": strategy.value,
+        }
+        if auto_prepull:
+            data["prepull"] = "true"
+
+        response = await self._client._post("templates/import", data=data, files=files)
+        return ImportResult.model_validate(response.json())
+
+    async def export_all(
+        self,
+        *,
+        tag: str | None = None,
+        names: list[str] | None = None,
+    ) -> bytes:
+        """Export all templates as YAML."""
+        params: dict[str, Any] = {}
+        if tag:
+            params["tag"] = tag
+        if names:
+            params["names"] = ",".join(names)
+
+        response = await self._client._get("templates/export", params=params)
+        return response.content
