@@ -1,0 +1,27 @@
+apiVersion: liteboxd/v1
+kind: SandboxTemplate
+metadata:
+  name: code-interpreter
+  displayName: Code Interpreter
+  description: 多语言代码执行环境，支持会话与文件操作
+  tags:
+    - code-interpreter
+    - multi-language
+spec:
+  image: docker.cnb.cool/fslongjin/liteboxd/code-interpreter:v0.1.0
+  resources:
+    cpu: "1000m"
+    memory: "2Gi"
+  ttl: 3600
+  env:
+    WORKSPACE_DIR: "/workspace"
+    JUPYTER_HOST: "0.0.0.0"
+    JUPYTER_PORT: "44771"
+    JUPYTER_TOKEN: "liteboxd-jupyter"
+    RUNTIME_PORT: "44772"
+  readinessProbe:
+    exec:
+      command: ["sh", "-c", "curl -sf http://127.0.0.1:44772/ping"]
+    initialDelaySeconds: 5
+    periodSeconds: 2
+    failureThreshold: 30

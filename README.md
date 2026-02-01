@@ -19,6 +19,13 @@ A lightweight K8s sandbox system inspired by e2b, designed to run on k3s.
 |:---:|:---:|
 | ![Sandbox List](docs/assests/screenshot-260130.png) | ![Template Management](docs/assests/screenshot-260130-template.png) |
 
+## Built-in Sandbox Templates
+
+| Template | Description | Location |
+|---|---|---|
+| code-interpreter | Multi-language code execution environment with session and file operations | templates/code-interpreter.yml |
+| nginx | Nginx web server sandbox | templates/nginx.yml |
+
 ## Quick Start
 
 ### Prerequisites
@@ -79,7 +86,6 @@ make run-all
 
 ## Security
 
-- Pods run as non-root user (UID 1000)
 - Privilege escalation is disabled
 - Resource limits prevent resource exhaustion
 - All sandboxes run in dedicated namespace

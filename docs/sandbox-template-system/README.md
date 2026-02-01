@@ -42,6 +42,13 @@
 | 底层技术 | Firecracker microVM | Kubernetes Pod |
 | 隔离级别 | 硬件级 (KVM) | 容器级 (cgroups) |
 
+### 内置模版（当前仓库提供）
+
+| 模版 | 说明 | 位置 |
+|---|---|---|
+| code-interpreter | 多语言代码执行环境，支持会话与文件操作 | ../../templates/code-interpreter.yml |
+| nginx | Nginx Web 服务器沙箱 | ../../templates/nginx.yml |
+
 ## 实现计划
 
 ### Phase 1: 核心模版功能 (优先)
