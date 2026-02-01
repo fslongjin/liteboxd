@@ -11,6 +11,8 @@ type SandboxListResponse = model.SandboxListResponse
 type ExecRequest = model.ExecRequest
 type ExecResponse = model.ExecResponse
 type LogsResponse = model.LogsResponse
+type WSMessage = model.WSMessage
+type ExecInteractiveRequest = model.ExecInteractiveRequest
 
 // Template types
 type Template = model.Template

@@ -68,3 +68,21 @@ type LogsResponse struct {
 	Logs   string   `json:"logs"`
 	Events []string `json:"events"`
 }
+
+// WSMessage represents a WebSocket message for interactive exec
+type WSMessage struct {
+	Type     string `json:"type"`               // "input", "output", "resize", "exit", "error"
+	Data     string `json:"data,omitempty"`     // terminal data (input/output)
+	Cols     int    `json:"cols,omitempty"`     // terminal columns (resize)
+	Rows     int    `json:"rows,omitempty"`     // terminal rows (resize)
+	ExitCode int    `json:"exitCode,omitempty"` // process exit code (exit)
+	Message  string `json:"message,omitempty"`  // error message (error)
+}
+
+// ExecInteractiveRequest defines parameters for interactive exec
+type ExecInteractiveRequest struct {
+	Command []string `json:"command"`
+	TTY     bool     `json:"tty"`
+	Cols    int      `json:"cols"`
+	Rows    int      `json:"rows"`
+}

@@ -3,10 +3,12 @@ package handler
 import (
 	"io"
 	"net/http"
+	"strconv"
 
 	"github.com/fslongjin/liteboxd/backend/internal/model"
 	"github.com/fslongjin/liteboxd/backend/internal/service"
 	"github.com/gin-gonic/gin"
+	"github.com/gorilla/websocket"
 )
 
 type SandboxHandler struct {
@@ -25,6 +27,7 @@ func (h *SandboxHandler) RegisterRoutes(r *gin.RouterGroup) {
 		sandboxes.GET("/:id", h.Get)
 		sandboxes.DELETE("/:id", h.Delete)
 		sandboxes.POST("/:id/exec", h.Exec)
+		sandboxes.GET("/:id/exec/interactive", h.ExecInteractive)
 		sandboxes.GET("/:id/logs", h.GetLogs)
 		sandboxes.POST("/:id/files", h.UploadFile)
 		sandboxes.GET("/:id/files", h.DownloadFile)
@@ -158,4 +161,45 @@ func (h *SandboxHandler) GetLogs(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, resp)
+}
+
+// WebSocket upgrader for interactive exec
+var wsUpgrader = websocket.Upgrader{
+	CheckOrigin: func(r *http.Request) bool {
+		return true // Allow all origins (CORS handled by middleware)
+	},
+	ReadBufferSize:  1024,
+	WriteBufferSize: 1024,
+}
+
+// ExecInteractive handles WebSocket-based interactive exec sessions.
+func (h *SandboxHandler) ExecInteractive(c *gin.Context) {
+	id := c.Param("id")
+
+	// Parse query parameters
+	command := c.QueryArray("command")
+	if len(command) == 0 {
+		command = []string{"sh"}
+	}
+	tty := c.DefaultQuery("tty", "true") == "true"
+	rows, _ := strconv.Atoi(c.DefaultQuery("rows", "24"))
+	cols, _ := strconv.Atoi(c.DefaultQuery("cols", "80"))
+
+	if rows <= 0 {
+		rows = 24
+	}
+	if cols <= 0 {
+		cols = 80
+	}
+
+	// Upgrade to WebSocket
+	ws, err := wsUpgrader.Upgrade(c.Writer, c.Request, nil)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to upgrade to websocket: " + err.Error()})
+		return
+	}
+	defer ws.Close()
+
+	// Bridge WebSocket to K8s exec
+	h.svc.ExecInteractive(c.Request.Context(), ws, id, command, tty, rows, cols)
 }
