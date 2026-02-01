@@ -2,14 +2,18 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/fslongjin/liteboxd/backend/internal/k8s"
 	"github.com/fslongjin/liteboxd/backend/internal/model"
 	"github.com/google/uuid"
+	"github.com/gorilla/websocket"
 	corev1 "k8s.io/api/core/v1"
 )
 
@@ -298,6 +302,99 @@ func (s *SandboxService) GetLogs(ctx context.Context, id string, tailLines int64
 		Logs:   logs,
 		Events: events,
 	}, nil
+}
+
+// ExecInteractive bridges a WebSocket connection to an interactive K8s exec session.
+func (s *SandboxService) ExecInteractive(ctx context.Context, ws *websocket.Conn, id string, command []string, tty bool, rows, cols int) {
+	// Create terminal size queue
+	sizeQueue := k8s.NewSizeQueue()
+	defer sizeQueue.Close()
+
+	// Push initial size
+	sizeQueue.Push(uint16(cols), uint16(rows))
+
+	// Create pipe for stdin
+	stdinReader, stdinWriter := io.Pipe()
+	defer stdinWriter.Close()
+
+	// Create a writer that sends output to WebSocket
+	wsWriter := &wsOutputWriter{ws: ws}
+
+	// Read WebSocket messages in a goroutine (stdin + resize)
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	go func() {
+		defer stdinWriter.Close()
+		for {
+			_, message, err := ws.ReadMessage()
+			if err != nil {
+				cancel()
+				return
+			}
+
+			var msg model.WSMessage
+			if err := json.Unmarshal(message, &msg); err != nil {
+				continue
+			}
+
+			switch msg.Type {
+			case "input":
+				if _, err := stdinWriter.Write([]byte(msg.Data)); err != nil {
+					cancel()
+					return
+				}
+			case "resize":
+				sizeQueue.Push(uint16(msg.Cols), uint16(msg.Rows))
+			}
+		}
+	}()
+
+	// Run interactive exec (blocks until process exits)
+	var stdinArg io.Reader = stdinReader
+	err := s.k8sClient.ExecInteractive(ctx, id, k8s.ExecInteractiveOptions{
+		Command:           command,
+		TTY:               tty,
+		Stdin:             stdinArg,
+		Stdout:            wsWriter,
+		Stderr:            nil, // merged into stdout when TTY=true
+		TerminalSizeQueue: sizeQueue,
+	})
+
+	// Send exit message
+	exitCode := 0
+	if err != nil {
+		if exitErr, ok := err.(interface{ ExitStatus() int }); ok {
+			exitCode = exitErr.ExitStatus()
+		} else {
+			exitCode = 1
+		}
+	}
+
+	exitMsg, _ := json.Marshal(model.WSMessage{Type: "exit", ExitCode: exitCode})
+	ws.WriteMessage(websocket.TextMessage, exitMsg)
+}
+
+// wsOutputWriter wraps a WebSocket connection as an io.Writer.
+// Sends terminal output as JSON messages to the client.
+type wsOutputWriter struct {
+	ws *websocket.Conn
+	mu sync.Mutex
+}
+
+func (w *wsOutputWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	msg, _ := json.Marshal(model.WSMessage{
+		Type: "output",
+		Data: string(p),
+	})
+	err := w.ws.WriteMessage(websocket.TextMessage, msg)
+	if err != nil {
+		return 0, err
+	}
+	return len(p), nil
 }
 
 func (s *SandboxService) StartTTLCleaner(interval time.Duration) {

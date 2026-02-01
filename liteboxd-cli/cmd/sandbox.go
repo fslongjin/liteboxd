@@ -3,12 +3,16 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/fslongjin/liteboxd/liteboxd-cli/internal/output"
 	liteboxd "github.com/fslongjin/liteboxd/sdk/go"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 var outputFormat string
@@ -81,19 +85,27 @@ var sandboxDeleteCmd = &cobra.Command{
 }
 
 var (
-	execTimeout  int
-	exitCodeFlag bool
+	execTimeout     int
+	exitCodeFlag    bool
+	execInteractive bool // -i flag
+	execTTY         bool // -t flag
 )
 
 var sandboxExecCmd = &cobra.Command{
-	Use:   "exec <id> -- <command> [args...]",
+	Use:   "exec <id> [flags] [-- <command> [args...]]",
 	Short: "Execute command in sandbox",
 	Args:  cobra.MinimumNArgs(1),
-	Example: `  # Python script
+	Example: `  # Non-interactive command
   liteboxd sandbox exec <id> -- python -c "print('hello')"
 
+  # Interactive shell login
+  liteboxd sandbox exec -it <id> -- /bin/bash
+
+  # Interactive with default shell (sh)
+  liteboxd sandbox exec -it <id>
+
   # Long-running command
-  liteboxd sandbox exec <id> --timeout 5m -- npm test`,
+  liteboxd sandbox exec <id> --timeout 300 -- npm test`,
 	RunE: runSandboxExec,
 }
 
@@ -179,6 +191,8 @@ func init() {
 	sandboxExecCmd.Flags().IntVar(&execTimeout, "timeout", 30, "Execution timeout in seconds")
 	sandboxExecCmd.Flags().BoolVar(&quietFlag, "quiet", false, "Only print stdout")
 	sandboxExecCmd.Flags().BoolVar(&exitCodeFlag, "exit-code", false, "Print exit code")
+	sandboxExecCmd.Flags().BoolVarP(&execInteractive, "stdin", "i", false, "Pass stdin to the container")
+	sandboxExecCmd.Flags().BoolVarP(&execTTY, "tty", "t", false, "Allocate a pseudo-TTY")
 	sandboxCmd.AddCommand(sandboxExecCmd)
 
 	// Logs command
@@ -310,11 +324,20 @@ func runSandboxDelete(cmd *cobra.Command, args []string) error {
 }
 
 func runSandboxExec(cmd *cobra.Command, args []string) error {
-	client := getAPIClient()
-
 	id := args[0]
-	// Find the "--" separator to split command from flags
 	cmdArgs := args[1:]
+
+	// If -i or -t, use interactive mode
+	if execInteractive || execTTY {
+		return runInteractiveExec(id, cmdArgs)
+	}
+
+	// Existing non-interactive path
+	return runNonInteractiveExec(cmd, id, cmdArgs)
+}
+
+func runNonInteractiveExec(cmd *cobra.Command, id string, cmdArgs []string) error {
+	client := getAPIClient()
 
 	resp, err := client.Sandbox.Execute(context.Background(), id, cmdArgs, execTimeout)
 	if err != nil {
@@ -335,6 +358,84 @@ func runSandboxExec(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("command exited with code %d", resp.ExitCode)
 	}
 
+	return nil
+}
+
+func runInteractiveExec(id string, command []string) error {
+	if len(command) == 0 {
+		command = []string{"sh"} // default shell
+	}
+
+	client := getAPIClient()
+
+	// Get terminal size
+	cols, rows := 80, 24
+	if term.IsTerminal(int(os.Stdin.Fd())) {
+		w, h, err := term.GetSize(int(os.Stdin.Fd()))
+		if err == nil {
+			cols = w
+			rows = h
+		}
+	}
+
+	// Connect via SDK
+	session, err := client.Sandbox.ExecInteractive(context.Background(), id, &liteboxd.ExecInteractiveRequest{
+		Command: command,
+		TTY:     execTTY,
+		Cols:    cols,
+		Rows:    rows,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to start interactive session: %w", err)
+	}
+	defer session.Close()
+
+	// Set terminal to raw mode if TTY
+	if execTTY && term.IsTerminal(int(os.Stdin.Fd())) {
+		oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
+		if err != nil {
+			return fmt.Errorf("failed to set raw mode: %w", err)
+		}
+		defer term.Restore(int(os.Stdin.Fd()), oldState)
+	}
+
+	// Handle SIGWINCH for terminal resize
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGWINCH)
+	defer signal.Stop(sigCh)
+
+	go func() {
+		for range sigCh {
+			if term.IsTerminal(int(os.Stdin.Fd())) {
+				w, h, err := term.GetSize(int(os.Stdin.Fd()))
+				if err == nil {
+					session.Resize(w, h)
+				}
+			}
+		}
+	}()
+
+	// Bidirectional copy
+	done := make(chan struct{})
+
+	// stdin -> session
+	go func() {
+		io.Copy(session, os.Stdin)
+	}()
+
+	// session -> stdout
+	go func() {
+		io.Copy(os.Stdout, session)
+		close(done)
+	}()
+
+	// Wait for session to end
+	exitCode := session.Wait()
+	<-done
+
+	if exitCode != 0 {
+		os.Exit(exitCode)
+	}
 	return nil
 }
 

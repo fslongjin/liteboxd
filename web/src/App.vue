@@ -1,5 +1,9 @@
 <template>
-  <t-layout>
+  <!-- Full-screen pages without layout -->
+  <router-view v-if="route.meta.hideLayout" />
+
+  <!-- Normal pages with layout -->
+  <t-layout v-else>
     <t-header class="app-header">
       <div class="logo">
         <h1>LiteBoxd</h1>

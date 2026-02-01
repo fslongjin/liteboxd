@@ -13,9 +13,14 @@
         </t-space>
       </template>
       <template #actions>
-        <t-popconfirm content="确定要删除该 Sandbox 吗？" @confirm="deleteSandbox">
-          <t-button theme="danger" variant="outline">删除</t-button>
-        </t-popconfirm>
+        <t-space>
+          <t-button theme="primary" @click="openTerminal" :disabled="sandbox?.status !== 'running'">
+            登录沙箱
+          </t-button>
+          <t-popconfirm content="确定要删除该 Sandbox 吗？" @confirm="deleteSandbox">
+            <t-button theme="danger" variant="outline">删除</t-button>
+          </t-popconfirm>
+        </t-space>
       </template>
 
       <t-loading :loading="loading">
@@ -154,6 +159,11 @@ const uploadFiles = ref<any[]>([])
 const uploading = ref(false)
 const downloadPath = ref('')
 const downloading = ref(false)
+
+const openTerminal = () => {
+  const url = router.resolve({ name: 'sandbox-terminal', params: { id: sandboxId } }).href
+  window.open(url, `terminal-${sandboxId}`, 'width=960,height=600')
+}
 
 const getStatusTheme = (status: string) => {
   switch (status) {

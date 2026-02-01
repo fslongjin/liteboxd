@@ -19,6 +19,12 @@ const router = createRouter({
       component: () => import('../views/SandboxDetail.vue'),
     },
     {
+      path: '/sandboxes/:id/terminal',
+      name: 'sandbox-terminal',
+      component: () => import('../views/SandboxTerminal.vue'),
+      meta: { hideLayout: true },
+    },
+    {
       path: '/templates',
       name: 'templates',
       component: () => import('../views/TemplateList.vue'),

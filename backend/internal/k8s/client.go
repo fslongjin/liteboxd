@@ -756,6 +756,52 @@ func randomString(length int) string {
 	return hex.EncodeToString(b)[:length]
 }
 
+// ExecInteractiveOptions defines options for interactive exec with streaming I/O.
+type ExecInteractiveOptions struct {
+	Command           []string
+	TTY               bool
+	Stdin             io.Reader
+	Stdout            io.Writer
+	Stderr            io.Writer // nil when TTY=true (merged into stdout)
+	TerminalSizeQueue remotecommand.TerminalSizeQueue
+}
+
+// ExecInteractive executes a command interactively with streaming I/O.
+// This is the core primitive for interactive terminal sessions.
+// Blocks until the command exits or ctx is cancelled.
+func (c *Client) ExecInteractive(ctx context.Context, sandboxID string, opts ExecInteractiveOptions) error {
+	podName := fmt.Sprintf("sandbox-%s", sandboxID)
+
+	req := c.clientset.CoreV1().RESTClient().Post().
+		Resource("pods").
+		Name(podName).
+		Namespace(SandboxNamespace).
+		SubResource("exec").
+		VersionedParams(&corev1.PodExecOptions{
+			Container: "main",
+			Command:   opts.Command,
+			Stdin:     opts.Stdin != nil,
+			Stdout:    true,
+			Stderr:    !opts.TTY, // stderr merges into stdout when TTY
+			TTY:       opts.TTY,
+		}, scheme.ParameterCodec)
+
+	exec, err := remotecommand.NewSPDYExecutor(c.config, "POST", req.URL())
+	if err != nil {
+		return fmt.Errorf("failed to create executor: %w", err)
+	}
+
+	streamOpts := remotecommand.StreamOptions{
+		Stdin:             opts.Stdin,
+		Stdout:            opts.Stdout,
+		Stderr:            opts.Stderr,
+		Tty:               opts.TTY,
+		TerminalSizeQueue: opts.TerminalSizeQueue,
+	}
+
+	return exec.StreamWithContext(ctx, streamOpts)
+}
+
 // GetPodIP returns the IP address of a sandbox pod
 func (c *Client) GetPodIP(ctx context.Context, sandboxID string) (string, error) {
 	podName := fmt.Sprintf("sandbox-%s", sandboxID)

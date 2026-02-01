@@ -7,7 +7,10 @@ import (
 	"fmt"
 	"io"
 	"mime/multipart"
+	"net/http"
 	"time"
+
+	"github.com/gorilla/websocket"
 )
 
 // SandboxService handles sandbox operations.
@@ -196,4 +199,42 @@ func (s *SandboxService) WaitForReady(ctx context.Context, id string, pollInterv
 			}
 		}
 	}
+}
+
+// ExecInteractive starts an interactive exec session via WebSocket.
+// Returns an ExecSession that implements io.Reader (stdout) and io.Writer (stdin).
+func (s *SandboxService) ExecInteractive(ctx context.Context, id string, req *ExecInteractiveRequest) (*ExecSession, error) {
+	// Build WebSocket URL from base URL
+	u := *s.client.baseURL
+	switch u.Scheme {
+	case "https":
+		u.Scheme = "wss"
+	default:
+		u.Scheme = "ws"
+	}
+	u.Path = s.client.baseURL.Path + "/" + s.client.buildPath("sandboxes", id, "exec", "interactive")
+
+	q := u.Query()
+	for _, cmd := range req.Command {
+		q.Add("command", cmd)
+	}
+	q.Set("tty", fmt.Sprintf("%v", req.TTY))
+	q.Set("rows", fmt.Sprintf("%d", req.Rows))
+	q.Set("cols", fmt.Sprintf("%d", req.Cols))
+	u.RawQuery = q.Encode()
+
+	// Prepare headers
+	header := http.Header{}
+	if s.client.authToken != "" {
+		header.Set("Authorization", "Bearer "+s.client.authToken)
+	}
+
+	// Dial WebSocket
+	dialer := websocket.Dialer{}
+	ws, _, err := dialer.DialContext(ctx, u.String(), header)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect websocket: %w", err)
+	}
+
+	return newExecSession(ws), nil
 }
