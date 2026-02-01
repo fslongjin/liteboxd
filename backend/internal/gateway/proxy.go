@@ -10,6 +10,7 @@ import (
 
 	"github.com/fslongjin/liteboxd/backend/internal/k8s"
 	"github.com/gin-gonic/gin"
+	"github.com/gorilla/websocket"
 	"k8s.io/client-go/rest"
 )
 
@@ -170,20 +171,167 @@ func (s *Service) ProxyHandler(c *gin.Context) {
 // handleWebSocketUpgrade handles WebSocket upgrade requests
 // Note: Full WebSocket support requires additional libraries like gorilla/websocket
 func (s *Service) handleWebSocketUpgrade(c *gin.Context, target *url.URL) {
-	// For now, return an error indicating WebSocket is not yet fully supported
-	// In production, you would:
-	// 1. Use gorilla/websocket to upgrade the client connection
-	// 2. Create a backend WebSocket connection to the pod
-	// 3. Proxy data bidirectionally between the two connections
+	if target == nil {
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
+			"error": "missing target for websocket proxy",
+		})
+		return
+	}
 
-	c.JSON(http.StatusNotImplemented, gin.H{
-		"error": "WebSocket support is not yet implemented",
-		"note":  "HTTP proxying is fully supported",
-	})
+	sandboxID := c.Param(sandboxIDParam)
+	port := c.GetString("port")
+	realPath := extractTargetPath(c.Request.URL.Path)
+	var backendURL *url.URL
+	var header http.Header
+	var dialer *websocket.Dialer
+
+	if s.config.UseK8sProxy {
+		k8sConfig := s.k8sClient.GetConfig()
+		podName := fmt.Sprintf("sandbox-%s", sandboxID)
+		k8sProxyPath := fmt.Sprintf("/api/v1/namespaces/%s/pods/%s:%s/proxy%s",
+			k8s.SandboxNamespace, podName, port, realPath)
+		backendURL = &url.URL{
+			Scheme:   wsSchemeFromTarget(target),
+			Host:     target.Host,
+			Path:     k8sProxyPath,
+			RawQuery: c.Request.URL.RawQuery,
+		}
+		header = cloneWebSocketHeaders(c.Request.Header, false)
+		if k8sConfig.BearerToken != "" {
+			header.Set("Authorization", "Bearer "+k8sConfig.BearerToken)
+		}
+		roundTripper, err := rest.TransportFor(k8sConfig)
+		if err != nil {
+			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
+				"error": "failed to build k8s transport: " + err.Error(),
+			})
+			return
+		}
+		transport, ok := roundTripper.(*http.Transport)
+		if !ok {
+			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
+				"error": "failed to build k8s transport: unexpected transport type",
+			})
+			return
+		}
+		dialer = &websocket.Dialer{
+			Proxy:            http.ProxyFromEnvironment,
+			HandshakeTimeout: 45 * time.Second,
+			TLSClientConfig:  transport.TLSClientConfig,
+			NetDialContext:   transport.DialContext,
+		}
+	} else {
+		backendURL = &url.URL{
+			Scheme:   wsSchemeFromTarget(target),
+			Host:     target.Host,
+			Path:     realPath,
+			RawQuery: c.Request.URL.RawQuery,
+		}
+		header = cloneWebSocketHeaders(c.Request.Header, true)
+		dialer = &websocket.Dialer{
+			Proxy:            http.ProxyFromEnvironment,
+			HandshakeTimeout: 45 * time.Second,
+		}
+	}
+
+	backendConn, resp, err := dialer.Dial(backendURL.String(), header)
+	if err != nil {
+		status := http.StatusBadGateway
+		if resp != nil {
+			status = resp.StatusCode
+		}
+		c.AbortWithStatusJSON(status, gin.H{
+			"error": "failed to connect to backend websocket: " + err.Error(),
+		})
+		return
+	}
+	defer backendConn.Close()
+
+	upgrader := websocket.Upgrader{
+		CheckOrigin:     func(r *http.Request) bool { return true },
+		ReadBufferSize:  1024,
+		WriteBufferSize: 1024,
+	}
+	if protocol := backendConn.Subprotocol(); protocol != "" {
+		upgrader.Subprotocols = []string{protocol}
+	}
+
+	clientConn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
+	if err != nil {
+		return
+	}
+	defer clientConn.Close()
+
+	errChan := make(chan error, 2)
+	go func() {
+		errChan <- relayWebSocketMessages(clientConn, backendConn)
+	}()
+	go func() {
+		errChan <- relayWebSocketMessages(backendConn, clientConn)
+	}()
+
+	select {
+	case <-c.Request.Context().Done():
+	case <-errChan:
+	}
 }
 
 // isWebSocketUpgrade checks if the request is a WebSocket upgrade request
 func isWebSocketUpgrade(req *http.Request) bool {
 	return strings.ToLower(req.Header.Get("Upgrade")) == "websocket" &&
 		strings.Contains(strings.ToLower(req.Header.Get("Connection")), "upgrade")
+}
+
+func wsSchemeFromTarget(target *url.URL) string {
+	if target == nil {
+		return "ws"
+	}
+	if target.Scheme == "https" || target.Scheme == "wss" {
+		return "wss"
+	}
+	return "ws"
+}
+
+func extractTargetPath(path string) string {
+	parts := strings.Split(path, "/")
+	portIndex := -1
+	for i, p := range parts {
+		if p == "port" && i+1 < len(parts) {
+			portIndex = i + 2
+			break
+		}
+	}
+	if portIndex > 0 && portIndex < len(parts) {
+		return "/" + strings.Join(parts[portIndex:], "/")
+	}
+	return "/"
+}
+
+func cloneWebSocketHeaders(src http.Header, removeAccessToken bool) http.Header {
+	dst := http.Header{}
+	for key, values := range src {
+		lower := strings.ToLower(key)
+		if lower == "connection" || lower == "upgrade" || lower == "sec-websocket-key" || lower == "sec-websocket-version" || lower == "sec-websocket-extensions" || lower == "host" {
+			continue
+		}
+		for _, v := range values {
+			dst.Add(key, v)
+		}
+	}
+	if removeAccessToken {
+		dst.Del(authorizationHeader)
+	}
+	return dst
+}
+
+func relayWebSocketMessages(dst, src *websocket.Conn) error {
+	for {
+		messageType, message, err := src.ReadMessage()
+		if err != nil {
+			return err
+		}
+		if err := dst.WriteMessage(messageType, message); err != nil {
+			return err
+		}
+	}
 }

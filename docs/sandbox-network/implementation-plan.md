@@ -284,8 +284,12 @@ func (p *ProxyHandler) ProxyRequest(c *gin.Context) {
 
 #### 3.4 WebSocket 支持
 - [ ] 检测 WebSocket Upgrade 请求
-- [ ] 建立 HTTP 隧道
-- [ ] 双向数据透传
+- [ ] 建立客户端 WebSocket 连接
+- [ ] 建立上游 WebSocket 连接（直连 Pod IP）
+- [ ] 建立上游 WebSocket 连接（K8s API Server Proxy）
+- [ ] 双向转发与关闭回收
+- [ ] 子协议与必要 Header 透传
+- [ ] 连接超时与保活策略
 
 #### 3.5 K8s Service 与 Ingress
 - [ ] 创建网关服务的 K8s Service

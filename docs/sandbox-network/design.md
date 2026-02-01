@@ -342,6 +342,8 @@ spec:
 2. 建立 HTTP 隧道连接到目标 Pod
 3. 双向透传数据帧
 
+补充方案与实现细节见 [websocket-proxy-plan.md](file:///home/longjin/code/lwsandbox/docs/sandbox-network/websocket-proxy-plan.md)。
+
 ## 5. 数据模型扩展
 
 ### 5.1 模板规范扩展
