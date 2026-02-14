@@ -16,6 +16,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
@@ -32,8 +33,9 @@ const (
 )
 
 type Client struct {
-	clientset *kubernetes.Clientset
-	config    *rest.Config
+	clientset     *kubernetes.Clientset
+	dynamicClient dynamic.Interface
+	config        *rest.Config
 }
 
 func NewClient(kubeconfigPath string) (*Client, error) {
@@ -54,14 +56,24 @@ func NewClient(kubeconfigPath string) (*Client, error) {
 		return nil, fmt.Errorf("failed to create kubernetes client: %w", err)
 	}
 
+	dynamicClient, err := dynamic.NewForConfig(config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create dynamic kubernetes client: %w", err)
+	}
+
 	return &Client{
-		clientset: clientset,
-		config:    config,
+		clientset:     clientset,
+		dynamicClient: dynamicClient,
+		config:        config,
 	}, nil
 }
 
 func (c *Client) GetConfig() *rest.Config {
 	return c.config
+}
+
+func (c *Client) GetDynamicClient() dynamic.Interface {
+	return c.dynamicClient
 }
 
 func (c *Client) EnsureNamespace(ctx context.Context) error {
@@ -185,8 +197,7 @@ func (c *Client) CreatePod(ctx context.Context, opts CreatePodOptions) (*corev1.
 		LabelSandboxID: opts.ID,
 	}
 
-	// Add internet-access label if network config specifies it
-	if opts.Network != nil && opts.Network.AllowInternetAccess {
+	if opts.Network != nil && opts.Network.AllowInternetAccess && len(opts.Network.AllowedDomains) == 0 {
 		labels[LabelInternetAccess] = "true"
 	}
 

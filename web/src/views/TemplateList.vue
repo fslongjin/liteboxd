@@ -160,14 +160,39 @@
           <t-form-item label="自动预拉取">
             <t-switch v-model="form.autoPrepull" />
           </t-form-item>
-          <t-form-item label="允许外网访问">
+          <t-form-item label="允许公网访问">
             <t-switch v-model="networkAllowInternet" />
-            <t-tooltip content="开启后，允许沙箱出站访问公网">
+            <t-tooltip content="开启后，允许沙箱出站访问公网（80/443 端口）">
               <t-icon
                 name="help-circle"
                 style="margin-left: 8px; color: var(--td-text-color-placeholder)"
               />
             </t-tooltip>
+          </t-form-item>
+          <t-form-item>
+            <template #label>
+              <span>域名白名单</span>
+              <t-tooltip content="仅允许访问白名单域名（需要开启公网访问才能生效）">
+                <t-icon
+                  name="help-circle"
+                  style="margin-left: 8px; color: var(--td-text-color-placeholder)"
+                />
+              </t-tooltip>
+            </template>
+            <div class="domain-whitelist-field">
+              <t-tag-input
+                v-model="networkAllowedDomains"
+                placeholder="如: example.com 或 *.example.com"
+                clearable
+                style="margin-bottom: 0"
+              />
+              <p
+                v-if="!networkAllowInternet && networkAllowedDomains.length > 0"
+                class="domain-whitelist-hint"
+              >
+                公网访问已关闭，暂不生效
+              </p>
+            </div>
           </t-form-item>
         </t-form>
       </div>
@@ -265,7 +290,7 @@ const form = ref<CreateTemplateRequest & { autoPrepull?: boolean }>({
     args: [],
     resources: { cpu: '500m', memory: '512Mi' },
     ttl: 3600,
-    network: { allowInternetAccess: false },
+    network: { allowInternetAccess: false, allowedDomains: [] },
     env: {},
     startupTimeout: 300,
   },
@@ -328,8 +353,20 @@ const envText = computed({
 const networkAllowInternet = computed({
   get: () => form.value.spec.network?.allowInternetAccess ?? false,
   set: (v: boolean) => {
-    if (!form.value.spec.network) form.value.spec.network = { allowInternetAccess: false }
+    if (!form.value.spec.network) {
+      form.value.spec.network = { allowInternetAccess: false, allowedDomains: [] }
+    }
     form.value.spec.network.allowInternetAccess = v
+  },
+})
+
+const networkAllowedDomains = computed({
+  get: () => form.value.spec.network?.allowedDomains ?? [],
+  set: (v: string[]) => {
+    if (!form.value.spec.network) {
+      form.value.spec.network = { allowInternetAccess: false, allowedDomains: [] }
+    }
+    form.value.spec.network.allowedDomains = v
   },
 })
 
@@ -407,7 +444,10 @@ const editTemplate = (tmpl: Template) => {
       args: tmpl.spec?.args ?? [],
       resources: tmpl.spec?.resources || { cpu: '', memory: '' },
       ttl: tmpl.spec?.ttl || 3600,
-      network: tmpl.spec?.network || { allowInternetAccess: false },
+      network: {
+        allowInternetAccess: tmpl.spec?.network?.allowInternetAccess ?? false,
+        allowedDomains: tmpl.spec?.network?.allowedDomains ?? [],
+      },
       env: tmpl.spec?.env || {},
       startupScript: tmpl.spec?.startupScript || '',
       startupTimeout: tmpl.spec?.startupTimeout || 300,
@@ -608,5 +648,23 @@ onMounted(() => {
   max-height: 70vh;
   overflow-y: auto;
   padding-right: 4px;
+}
+
+/* 域名白名单：输入框与下方提示纵向排列，提示紧贴输入框 */
+.domain-whitelist-field {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  width: 100%;
+  gap: 2px;
+}
+
+/* 直接由容器 gap 控制间距，避免与组件默认 margin 叠加 */
+.domain-whitelist-hint {
+  margin: 0;
+  padding: 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--td-warning-color);
 }
 </style>

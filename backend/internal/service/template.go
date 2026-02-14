@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"strings"
 
 	"github.com/fslongjin/liteboxd/backend/internal/model"
 	"github.com/fslongjin/liteboxd/backend/internal/store"
@@ -46,7 +47,87 @@ func validateSpec(spec *model.TemplateSpec) error {
 	if spec.Image == "" {
 		return fmt.Errorf("image is required")
 	}
+	if err := validateNetworkSpec(spec.Network); err != nil {
+		return err
+	}
 	return nil
+}
+
+func validateNetworkSpec(spec *model.NetworkSpec) error {
+	if spec == nil {
+		return nil
+	}
+	normalized, err := normalizeAllowedDomains(spec.AllowedDomains)
+	if err != nil {
+		return err
+	}
+	// Normalize and validate domains, but don't enforce AllowInternetAccess requirement.
+	// The domains are stored but only applied when AllowInternetAccess is true.
+	spec.AllowedDomains = normalized
+	return nil
+}
+
+func normalizeAllowedDomains(domains []string) ([]string, error) {
+	seen := make(map[string]struct{})
+	var normalized []string
+	for _, domain := range domains {
+		value := strings.TrimSpace(strings.ToLower(domain))
+		value = strings.TrimSuffix(value, ".")
+		if value == "" {
+			return nil, fmt.Errorf("allowedDomains contains empty value")
+		}
+		if strings.Contains(value, "://") || strings.ContainsAny(value, "/") || strings.Contains(value, ":") {
+			return nil, fmt.Errorf("allowedDomains contains invalid value: %s", domain)
+		}
+		if strings.HasPrefix(value, "*.") {
+			base := strings.TrimPrefix(value, "*.")
+			if !isValidDomain(base) {
+				return nil, fmt.Errorf("allowedDomains contains invalid value: %s", domain)
+			}
+		} else {
+			if strings.Contains(value, "*") {
+				return nil, fmt.Errorf("allowedDomains contains invalid value: %s", domain)
+			}
+			if !isValidDomain(value) {
+				return nil, fmt.Errorf("allowedDomains contains invalid value: %s", domain)
+			}
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		normalized = append(normalized, value)
+	}
+	return normalized, nil
+}
+
+func isValidDomain(domain string) bool {
+	if len(domain) == 0 || len(domain) > 253 {
+		return false
+	}
+	labels := strings.Split(domain, ".")
+	for _, label := range labels {
+		if !isValidDomainLabel(label) {
+			return false
+		}
+	}
+	return true
+}
+
+func isValidDomainLabel(label string) bool {
+	if len(label) == 0 || len(label) > 63 {
+		return false
+	}
+	if label[0] == '-' || label[len(label)-1] == '-' {
+		return false
+	}
+	for _, ch := range label {
+		if (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '-' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 // Create creates a new template

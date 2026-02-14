@@ -167,6 +167,15 @@ func (s *SandboxService) Create(ctx context.Context, req *model.CreateSandboxReq
 		return nil, fmt.Errorf("failed to create pod: %w", err)
 	}
 
+	// Only apply domain allowlist policy if internet access is enabled
+	if networkConfig != nil && networkConfig.AllowInternetAccess && len(networkConfig.AllowedDomains) > 0 {
+		netPolicyMgr := k8s.NewNetworkPolicyManager(s.k8sClient)
+		if err := netPolicyMgr.ApplyDomainAllowlistPolicy(ctx, id, networkConfig.AllowedDomains); err != nil {
+			_ = s.k8sClient.DeletePod(ctx, id)
+			return nil, fmt.Errorf("failed to apply domain allowlist policy: %w", err)
+		}
+	}
+
 	// Get access token from pod annotations
 	accessToken := pod.Annotations[k8s.AnnotationAccessToken]
 
@@ -255,6 +264,10 @@ func (s *SandboxService) List(ctx context.Context) (*model.SandboxListResponse, 
 }
 
 func (s *SandboxService) Delete(ctx context.Context, id string) error {
+	netPolicyMgr := k8s.NewNetworkPolicyManager(s.k8sClient)
+	if err := netPolicyMgr.DeleteDomainAllowlistPolicy(ctx, id); err != nil {
+		fmt.Printf("failed to delete domain allowlist policy for sandbox %s: %v\n", id, err)
+	}
 	return s.k8sClient.DeletePod(ctx, id)
 }
 
@@ -418,6 +431,10 @@ func (s *SandboxService) cleanExpiredSandboxes() {
 		if s.isExpired(&pod) {
 			sandboxID := pod.Labels[k8s.LabelSandboxID]
 			fmt.Printf("TTL cleaner: deleting expired sandbox %s\n", sandboxID)
+			netPolicyMgr := k8s.NewNetworkPolicyManager(s.k8sClient)
+			if err := netPolicyMgr.DeleteDomainAllowlistPolicy(ctx, sandboxID); err != nil {
+				fmt.Printf("TTL cleaner: failed to delete domain allowlist policy for sandbox %s: %v\n", sandboxID, err)
+			}
 			if err := s.k8sClient.DeletePod(ctx, sandboxID); err != nil {
 				fmt.Printf("TTL cleaner: failed to delete pod %s: %v\n", sandboxID, err)
 			}

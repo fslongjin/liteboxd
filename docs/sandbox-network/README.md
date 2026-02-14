@@ -9,6 +9,7 @@
 | [design.md](./design.md) | 完整的系统设计文档，包含架构、网络策略、安全考虑 |
 | [implementation-plan.md](./implementation-plan.md) | 分阶段实现计划，包含任务清单和验收标准 |
 | [websocket-proxy-plan.md](./websocket-proxy-plan.md) | 网关 WebSocket 透传方案与实现细节 |
+| [domain-whitelist-plan.md](./domain-whitelist-plan.md) | 出网域名白名单方案与实现细节 |
 | [network-policies/](./network-policies/) | Kubernetes Network Policy 资源示例 |
 
 ## 快速概览

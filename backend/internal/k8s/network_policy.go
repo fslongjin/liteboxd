@@ -3,11 +3,14 @@ package k8s
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
@@ -16,6 +19,12 @@ const (
 	AnnotationAccessToken = "liteboxd.io/access-token"
 	LabelInternetAccess   = "liteboxd.io/internet-access"
 )
+
+var ciliumPolicyGVR = schema.GroupVersionResource{
+	Group:    "cilium.io",
+	Version:  "v2",
+	Resource: "ciliumnetworkpolicies",
+}
 
 // NetworkPolicyManager manages network policies for sandboxes
 type NetworkPolicyManager struct {
@@ -330,6 +339,99 @@ func (m *NetworkPolicyManager) AllowInternetAccess(ctx context.Context, sandboxI
 // DenyInternetAccess removes the internet-access label from a sandbox pod
 func (m *NetworkPolicyManager) DenyInternetAccess(ctx context.Context, sandboxID string) error {
 	return m.setInternetAccessLabel(ctx, sandboxID, "false")
+}
+
+func (m *NetworkPolicyManager) ApplyDomainAllowlistPolicy(ctx context.Context, sandboxID string, domains []string) error {
+	if len(domains) == 0 {
+		return nil
+	}
+	policy := m.domainAllowlistPolicy(sandboxID, domains)
+	resource := m.client.dynamicClient.Resource(ciliumPolicyGVR).Namespace(SandboxNamespace)
+	existing, err := resource.Get(ctx, policy.GetName(), metav1.GetOptions{})
+	if err != nil {
+		if errors.IsNotFound(err) {
+			_, err = resource.Create(ctx, policy, metav1.CreateOptions{})
+			return err
+		}
+		return err
+	}
+	policy.SetResourceVersion(existing.GetResourceVersion())
+	_, err = resource.Update(ctx, policy, metav1.UpdateOptions{})
+	return err
+}
+
+func (m *NetworkPolicyManager) DeleteDomainAllowlistPolicy(ctx context.Context, sandboxID string) error {
+	resource := m.client.dynamicClient.Resource(ciliumPolicyGVR).Namespace(SandboxNamespace)
+	err := resource.Delete(ctx, domainAllowlistPolicyName(sandboxID), metav1.DeleteOptions{})
+	if errors.IsNotFound(err) {
+		return nil
+	}
+	return err
+}
+
+func domainAllowlistPolicyName(sandboxID string) string {
+	return fmt.Sprintf("sandbox-egress-allowlist-%s", sandboxID)
+}
+
+func (m *NetworkPolicyManager) domainAllowlistPolicy(sandboxID string, domains []string) *unstructured.Unstructured {
+	var toFQDNs []interface{}
+	for _, domain := range domains {
+		if strings.HasPrefix(domain, "*.") {
+			toFQDNs = append(toFQDNs, map[string]interface{}{"matchPattern": domain})
+		} else {
+			toFQDNs = append(toFQDNs, map[string]interface{}{"matchName": domain})
+		}
+	}
+
+	return &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "cilium.io/v2",
+			"kind":       "CiliumNetworkPolicy",
+			"metadata": map[string]interface{}{
+				"name":      domainAllowlistPolicyName(sandboxID),
+				"namespace": SandboxNamespace,
+			},
+			"spec": map[string]interface{}{
+				"endpointSelector": map[string]interface{}{
+					"matchLabels": map[string]interface{}{
+						"app":          LabelApp,
+						LabelSandboxID: sandboxID,
+					},
+				},
+				"egress": []interface{}{
+					map[string]interface{}{
+						"toFQDNs": toFQDNs,
+						"toPorts": []interface{}{
+							map[string]interface{}{
+								"ports": []interface{}{
+									map[string]interface{}{"port": "443", "protocol": "TCP"},
+									map[string]interface{}{"port": "80", "protocol": "TCP"},
+								},
+							},
+						},
+					},
+					map[string]interface{}{
+						"toEndpoints": []interface{}{
+							map[string]interface{}{
+								"matchLabels": map[string]interface{}{
+									"k8s-app":                     "kube-dns",
+									"io.kubernetes.pod.namespace": "kube-system",
+								},
+							},
+						},
+						"toPorts": []interface{}{
+							map[string]interface{}{
+								"ports": []interface{}{
+									map[string]interface{}{"port": "53", "protocol": "UDP"},
+									map[string]interface{}{"port": "53", "protocol": "TCP"},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
 }
 
 // setInternetAccessLabel sets or removes the internet-access label on a pod
