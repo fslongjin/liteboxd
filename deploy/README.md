@@ -8,6 +8,7 @@
 |----------|------|
 | `system/` | 控制面部署（`liteboxd-system`），包含 api/gateway、PVC、RBAC |
 | `sandbox/` | 沙箱面部署（`liteboxd-sandbox`），包含 NetworkPolicy 与跨命名空间 RBAC |
+| `rolling-upgrade.md` | 控制面滚动升级操作指南（升级、验证、回滚） |
 | `gateway.yaml` | 旧版单文件部署（已不推荐） |
 | `network-policies/` | 旧版网络策略目录（已不推荐） |
 
@@ -186,8 +187,20 @@ bash deploy/scripts/port-forward-k8s.sh
 | `SANDBOX_NAMESPACE` | liteboxd-sandbox | 沙箱命名空间 |
 | `PORT` | 8080 | API 服务端口 |
 | `PORT` (gateway) | 8081 | 网关服务端口 |
+| `SHUTDOWN_TIMEOUT` | 120s（部署清单中） | 优雅停机与会话排空超时时间 |
 | `GATEWAY_URL` | http://liteboxd-gateway.liteboxd-system.svc.cluster.local:8081 | API 返回给客户端的网关访问地址 |
 | `DATA_DIR` | ./data | 数据目录 |
+
+## Phase2 热升级行为
+
+- `livenessProbe` 使用 `/health`（进程活性）
+- `readinessProbe` 使用 `/readyz`（draining 时返回 503），探测周期为 2 秒，失败阈值为 1
+- 收到 `SIGTERM` 后：
+  1. 先进入 draining，停止接收新请求/会话
+  2. 触发 readiness 失败，让 Pod 从 Service endpoints 摘除
+  3. 等待已有 WebSocket 会话排空，直到 `SHUTDOWN_TIMEOUT`
+- 部署里配置了 `preStop sleep 5`，为 endpoint 摘除传播预留缓冲
+- Ingress 已启用 Traefik retry middleware（`attempts: 2`，`initialInterval: 100ms`），降低滚动升级期间短暂 503 的用户感知
 
 ## 故障排查
 

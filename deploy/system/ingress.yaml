@@ -5,6 +5,8 @@ metadata:
   annotations:
     # Keep websocket and long-running HTTP requests stable for interactive sessions.
     traefik.ingress.kubernetes.io/router.entrypoints: web
+    # Retry transient upstream failures (e.g. draining window during rolling upgrades).
+    traefik.ingress.kubernetes.io/router.middlewares: liteboxd-system-liteboxd-retry@kubernetescrd
 spec:
   ingressClassName: traefik
   rules:

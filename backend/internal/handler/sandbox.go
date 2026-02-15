@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/fslongjin/liteboxd/backend/internal/lifecycle"
 	"github.com/fslongjin/liteboxd/backend/internal/model"
 	"github.com/fslongjin/liteboxd/backend/internal/service"
 	"github.com/gin-gonic/gin"
@@ -12,11 +13,12 @@ import (
 )
 
 type SandboxHandler struct {
-	svc *service.SandboxService
+	svc        *service.SandboxService
+	drainState *lifecycle.DrainManager
 }
 
-func NewSandboxHandler(svc *service.SandboxService) *SandboxHandler {
-	return &SandboxHandler{svc: svc}
+func NewSandboxHandler(svc *service.SandboxService, drainState *lifecycle.DrainManager) *SandboxHandler {
+	return &SandboxHandler{svc: svc, drainState: drainState}
 }
 
 func (h *SandboxHandler) RegisterRoutes(r *gin.RouterGroup) {
@@ -174,6 +176,11 @@ var wsUpgrader = websocket.Upgrader{
 
 // ExecInteractive handles WebSocket-based interactive exec sessions.
 func (h *SandboxHandler) ExecInteractive(c *gin.Context) {
+	if h.drainState != nil && h.drainState.IsDraining() {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "service is draining"})
+		return
+	}
+
 	id := c.Param("id")
 
 	// Parse query parameters
@@ -199,6 +206,12 @@ func (h *SandboxHandler) ExecInteractive(c *gin.Context) {
 		return
 	}
 	defer ws.Close()
+
+	release := func() {}
+	if h.drainState != nil {
+		release = h.drainState.TrackWebSocket()
+	}
+	defer release()
 
 	// Bridge WebSocket to K8s exec
 	h.svc.ExecInteractive(c.Request.Context(), ws, id, command, tty, rows, cols)

@@ -17,6 +17,7 @@ spec:
       labels:
         app: liteboxd-gateway
     spec:
+      terminationGracePeriodSeconds: 120
       serviceAccountName: liteboxd-gateway
       containers:
         - name: gateway
@@ -41,6 +42,8 @@ spec:
                 configMapKeyRef:
                   name: liteboxd-config
                   key: CONTROL_NAMESPACE
+            - name: SHUTDOWN_TIMEOUT
+              value: 120s
           resources:
             requests:
               cpu: 100m
@@ -48,6 +51,13 @@ spec:
             limits:
               cpu: 500m
               memory: 512Mi
+          lifecycle:
+            preStop:
+              exec:
+                command:
+                  - /bin/sh
+                  - -c
+                  - sleep 5
           livenessProbe:
             httpGet:
               path: /health
@@ -56,7 +66,9 @@ spec:
             periodSeconds: 30
           readinessProbe:
             httpGet:
-              path: /health
+              path: /readyz
               port: 8081
-            initialDelaySeconds: 5
-            periodSeconds: 10
+            initialDelaySeconds: 2
+            periodSeconds: 2
+            timeoutSeconds: 1
+            failureThreshold: 1

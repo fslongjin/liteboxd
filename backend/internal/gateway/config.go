@@ -44,6 +44,12 @@ func LoadConfig() *Config {
 	}
 
 	useK8sProxy := os.Getenv("DEV_USE_K8S_PROXY") == "true"
+	shutdownTimeout := 30 * time.Second
+	if v := os.Getenv("SHUTDOWN_TIMEOUT"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			shutdownTimeout = d
+		}
+	}
 
 	return &Config{
 		Port:             port,
@@ -51,7 +57,7 @@ func LoadConfig() *Config {
 		SandboxNamespace: sandboxNamespace,
 		ControlNamespace: controlNamespace,
 		RequestTimeout:   5 * time.Minute,
-		ShutdownTimeout:  30 * time.Second,
+		ShutdownTimeout:  shutdownTimeout,
 		UseK8sProxy:      useK8sProxy,
 	}
 }

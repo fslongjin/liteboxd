@@ -15,6 +15,13 @@ import (
 
 // ProxyHandler handles proxying requests to sandbox pods
 func (s *Service) ProxyHandler(c *gin.Context) {
+	if s.drainState != nil && s.drainState.IsDraining() {
+		c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{
+			"error": "service is draining",
+		})
+		return
+	}
+
 	sandboxID := c.Param(sandboxIDParam)
 	port := c.GetString("port")
 
@@ -260,6 +267,12 @@ func (s *Service) handleWebSocketUpgrade(c *gin.Context, target *url.URL) {
 		return
 	}
 	defer clientConn.Close()
+
+	release := func() {}
+	if s.drainState != nil {
+		release = s.drainState.TrackWebSocket()
+	}
+	defer release()
 
 	errChan := make(chan error, 2)
 	go func() {

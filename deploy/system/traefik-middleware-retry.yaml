@@ -1,0 +1,8 @@
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: liteboxd-retry
+spec:
+  retry:
+    attempts: 2
+    initialInterval: 100ms

@@ -4,12 +4,16 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/fslongjin/liteboxd/backend/internal/handler"
 	"github.com/fslongjin/liteboxd/backend/internal/k8s"
+	"github.com/fslongjin/liteboxd/backend/internal/lifecycle"
 	"github.com/fslongjin/liteboxd/backend/internal/service"
 	"github.com/fslongjin/liteboxd/backend/internal/store"
 	"github.com/gin-contrib/cors"
@@ -88,8 +92,10 @@ func main() {
 		}
 	}()
 
+	drainState := lifecycle.NewDrainManager()
+
 	// Create handlers
-	sandboxHandler := handler.NewSandboxHandler(sandboxSvc)
+	sandboxHandler := handler.NewSandboxHandler(sandboxSvc, drainState)
 	templateHandler := handler.NewTemplateHandler(templateSvc)
 	prepullHandler := handler.NewPrepullHandler(prepullSvc, templateSvc)
 	importExportHandler := handler.NewImportExportHandler(importExportSvc)
@@ -104,9 +110,23 @@ func main() {
 		AllowCredentials: true,
 		MaxAge:           12 * time.Hour,
 	}))
+	r.Use(func(c *gin.Context) {
+		if drainState.IsDraining() && c.Request.URL.Path != "/health" && c.Request.URL.Path != "/readyz" {
+			c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"error": "service is draining"})
+			return
+		}
+		c.Next()
+	})
 
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(200, gin.H{"status": "ok"})
+	})
+	r.GET("/readyz", func(c *gin.Context) {
+		if drainState.IsDraining() {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"status": "draining"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
 
 	api := r.Group("/api/v1")
@@ -120,8 +140,47 @@ func main() {
 		port = "8080"
 	}
 
-	fmt.Printf("Server starting on port %s\n", port)
-	if err := r.Run(":" + port); err != nil {
-		log.Fatalf("Failed to start server: %v", err)
+	shutdownTimeout := 30 * time.Second
+	if v := os.Getenv("SHUTDOWN_TIMEOUT"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			shutdownTimeout = d
+		}
 	}
+
+	srv := &http.Server{
+		Addr:         ":" + port,
+		Handler:      r,
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 10 * time.Second,
+		IdleTimeout:  60 * time.Second,
+	}
+
+	go func() {
+		fmt.Printf("Server starting on port %s\n", port)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("Failed to start server: %v", err)
+		}
+	}()
+
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+	log.Println("Shutting down API server...")
+
+	drainState.StartDraining()
+	time.Sleep(2 * time.Second)
+
+	ctxShutdown, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancel()
+	if err := srv.Shutdown(ctxShutdown); err != nil {
+		log.Fatalf("Server forced to shutdown: %v", err)
+	}
+
+	drainCtx, drainCancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer drainCancel()
+	if err := drainState.WaitWebSockets(drainCtx); err != nil {
+		log.Printf("API drained with timeout, remaining active websockets: %d", drainState.ActiveWebSockets())
+	}
+
+	log.Println("API server stopped")
 }

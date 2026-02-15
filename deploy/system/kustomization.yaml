@@ -6,6 +6,7 @@ resources:
   - configmap.yaml
   - serviceaccounts.yaml
   - rbac-cluster.yaml
+  - traefik-middleware-retry.yaml
   - pvc.yaml
   - api-service.yaml
   - api-deployment.yaml

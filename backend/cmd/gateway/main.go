@@ -11,6 +11,7 @@ import (
 
 	"github.com/fslongjin/liteboxd/backend/internal/gateway"
 	"github.com/fslongjin/liteboxd/backend/internal/k8s"
+	"github.com/fslongjin/liteboxd/backend/internal/lifecycle"
 	"github.com/gin-gonic/gin"
 )
 
@@ -35,7 +36,8 @@ func main() {
 	}
 
 	// Create gateway service
-	svc := gateway.NewService(k8sClient, config)
+	drainState := lifecycle.NewDrainManager()
+	svc := gateway.NewService(k8sClient, config, drainState)
 
 	// Set Gin mode
 	gin.SetMode(gin.ReleaseMode)
@@ -44,6 +46,13 @@ func main() {
 	r := gin.New()
 	r.Use(gin.Recovery())
 	r.Use(gin.Logger())
+	r.Use(func(c *gin.Context) {
+		if drainState.IsDraining() && c.Request.URL.Path != "/health" && c.Request.URL.Path != "/readyz" {
+			c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"error": "service is draining"})
+			return
+		}
+		c.Next()
+	})
 
 	// Register routes
 	svc.RegisterRoutes(r)
@@ -70,6 +79,8 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 	log.Println("Shutting down gateway server...")
+	drainState.StartDraining()
+	time.Sleep(2 * time.Second)
 
 	// Graceful shutdown
 	ctx, cancel := context.WithTimeout(context.Background(), config.ShutdownTimeout)
@@ -77,6 +88,12 @@ func main() {
 
 	if err := srv.Shutdown(ctx); err != nil {
 		log.Fatalf("Server forced to shutdown: %v", err)
+	}
+
+	drainCtx, drainCancel := context.WithTimeout(context.Background(), config.ShutdownTimeout)
+	defer drainCancel()
+	if err := drainState.WaitWebSockets(drainCtx); err != nil {
+		log.Printf("Gateway drained with timeout, remaining active websockets: %d", drainState.ActiveWebSockets())
 	}
 
 	log.Println("Gateway server stopped")
