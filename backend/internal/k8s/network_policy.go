@@ -80,10 +80,10 @@ func (m *NetworkPolicyManager) EnsureDefaultPolicies(ctx context.Context) error 
 
 // ensurePolicy creates or updates a network policy
 func (m *NetworkPolicyManager) ensurePolicy(ctx context.Context, policy *networkingv1.NetworkPolicy) error {
-	existing, err := m.client.clientset.NetworkingV1().NetworkPolicies(SandboxNamespace).Get(ctx, policy.Name, metav1.GetOptions{})
+	existing, err := m.client.clientset.NetworkingV1().NetworkPolicies(m.client.sandboxNS).Get(ctx, policy.Name, metav1.GetOptions{})
 	if err != nil {
 		if errors.IsNotFound(err) {
-			_, err = m.client.clientset.NetworkingV1().NetworkPolicies(SandboxNamespace).Create(ctx, policy, metav1.CreateOptions{})
+			_, err = m.client.clientset.NetworkingV1().NetworkPolicies(m.client.sandboxNS).Create(ctx, policy, metav1.CreateOptions{})
 			return err
 		}
 		return err
@@ -91,7 +91,7 @@ func (m *NetworkPolicyManager) ensurePolicy(ctx context.Context, policy *network
 
 	// Update existing policy
 	policy.ResourceVersion = existing.ResourceVersion
-	_, err = m.client.clientset.NetworkingV1().NetworkPolicies(SandboxNamespace).Update(ctx, policy, metav1.UpdateOptions{})
+	_, err = m.client.clientset.NetworkingV1().NetworkPolicies(m.client.sandboxNS).Update(ctx, policy, metav1.UpdateOptions{})
 	return err
 }
 
@@ -229,7 +229,7 @@ func (m *NetworkPolicyManager) allowGatewayIngressPolicy() *networkingv1.Network
 				{
 					From: []networkingv1.NetworkPolicyPeer{
 						{
-							// Allow from gateway pods in the same namespace
+							// Allow from gateway pods in control namespace
 							PodSelector: &metav1.LabelSelector{
 								MatchLabels: map[string]string{
 									"app": "liteboxd-gateway",
@@ -237,7 +237,7 @@ func (m *NetworkPolicyManager) allowGatewayIngressPolicy() *networkingv1.Network
 							},
 							NamespaceSelector: &metav1.LabelSelector{
 								MatchLabels: map[string]string{
-									"name": SandboxNamespace,
+									"kubernetes.io/metadata.name": m.client.controlNS,
 								},
 							},
 						},
@@ -346,7 +346,7 @@ func (m *NetworkPolicyManager) ApplyDomainAllowlistPolicy(ctx context.Context, s
 		return nil
 	}
 	policy := m.domainAllowlistPolicy(sandboxID, domains)
-	resource := m.client.dynamicClient.Resource(ciliumPolicyGVR).Namespace(SandboxNamespace)
+	resource := m.client.dynamicClient.Resource(ciliumPolicyGVR).Namespace(m.client.sandboxNS)
 	existing, err := resource.Get(ctx, policy.GetName(), metav1.GetOptions{})
 	if err != nil {
 		if errors.IsNotFound(err) {
@@ -361,7 +361,7 @@ func (m *NetworkPolicyManager) ApplyDomainAllowlistPolicy(ctx context.Context, s
 }
 
 func (m *NetworkPolicyManager) DeleteDomainAllowlistPolicy(ctx context.Context, sandboxID string) error {
-	resource := m.client.dynamicClient.Resource(ciliumPolicyGVR).Namespace(SandboxNamespace)
+	resource := m.client.dynamicClient.Resource(ciliumPolicyGVR).Namespace(m.client.sandboxNS)
 	err := resource.Delete(ctx, domainAllowlistPolicyName(sandboxID), metav1.DeleteOptions{})
 	if errors.IsNotFound(err) {
 		return nil
@@ -389,7 +389,7 @@ func (m *NetworkPolicyManager) domainAllowlistPolicy(sandboxID string, domains [
 			"kind":       "CiliumNetworkPolicy",
 			"metadata": map[string]interface{}{
 				"name":      domainAllowlistPolicyName(sandboxID),
-				"namespace": SandboxNamespace,
+				"namespace": m.client.sandboxNS,
 			},
 			"spec": map[string]interface{}{
 				"endpointSelector": map[string]interface{}{
@@ -438,7 +438,7 @@ func (m *NetworkPolicyManager) domainAllowlistPolicy(sandboxID string, domains [
 func (m *NetworkPolicyManager) setInternetAccessLabel(ctx context.Context, sandboxID, value string) error {
 	podName := fmt.Sprintf("sandbox-%s", sandboxID)
 
-	pod, err := m.client.clientset.CoreV1().Pods(SandboxNamespace).Get(ctx, podName, metav1.GetOptions{})
+	pod, err := m.client.clientset.CoreV1().Pods(m.client.sandboxNS).Get(ctx, podName, metav1.GetOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to get pod: %w", err)
 	}
@@ -453,6 +453,6 @@ func (m *NetworkPolicyManager) setInternetAccessLabel(ctx context.Context, sandb
 		pod.Labels[LabelInternetAccess] = value
 	}
 
-	_, err = m.client.clientset.CoreV1().Pods(SandboxNamespace).Update(ctx, pod, metav1.UpdateOptions{})
+	_, err = m.client.clientset.CoreV1().Pods(m.client.sandboxNS).Update(ctx, pod, metav1.UpdateOptions{})
 	return err
 }

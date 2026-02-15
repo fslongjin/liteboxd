@@ -1,0 +1,62 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: liteboxd-gateway
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: liteboxd-gateway
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: liteboxd-gateway
+    spec:
+      serviceAccountName: liteboxd-gateway
+      containers:
+        - name: gateway
+          image: liteboxd/gateway:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8081
+              name: http
+          env:
+            - name: PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: liteboxd-config
+                  key: GATEWAY_PORT
+            - name: SANDBOX_NAMESPACE
+              valueFrom:
+                configMapKeyRef:
+                  name: liteboxd-config
+                  key: SANDBOX_NAMESPACE
+            - name: CONTROL_NAMESPACE
+              valueFrom:
+                configMapKeyRef:
+                  name: liteboxd-config
+                  key: CONTROL_NAMESPACE
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8081
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8081
+            initialDelaySeconds: 5
+            periodSeconds: 10

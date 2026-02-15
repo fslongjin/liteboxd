@@ -32,12 +32,20 @@ func main() {
 	fmt.Println("Database initialized")
 
 	kubeconfigPath := os.Getenv("KUBECONFIG")
-	if kubeconfigPath == "" {
-		home := os.Getenv("HOME")
-		kubeconfigPath = home + "/.kube/config"
+	sandboxNamespace := os.Getenv("SANDBOX_NAMESPACE")
+	if sandboxNamespace == "" {
+		sandboxNamespace = k8s.DefaultSandboxNamespace
+	}
+	controlNamespace := os.Getenv("CONTROL_NAMESPACE")
+	if controlNamespace == "" {
+		controlNamespace = k8s.DefaultControlNamespace
 	}
 
-	k8sClient, err := k8s.NewClient(kubeconfigPath)
+	k8sClient, err := k8s.NewClient(k8s.ClientConfig{
+		KubeconfigPath:   kubeconfigPath,
+		SandboxNamespace: sandboxNamespace,
+		ControlNamespace: controlNamespace,
+	})
 	if err != nil {
 		log.Fatalf("Failed to create k8s client: %v", err)
 	}
@@ -46,7 +54,7 @@ func main() {
 	if err := k8sClient.EnsureNamespace(ctx); err != nil {
 		log.Fatalf("Failed to ensure namespace: %v", err)
 	}
-	fmt.Println("Namespace 'liteboxd' ensured")
+	fmt.Printf("Namespace '%s' ensured\n", k8sClient.SandboxNamespace())
 
 	// Ensure network policies are applied
 	netPolicyMgr := k8s.NewNetworkPolicyManager(k8sClient)

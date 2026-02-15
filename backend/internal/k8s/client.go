@@ -25,25 +25,46 @@ import (
 )
 
 const (
-	SandboxNamespace    = "liteboxd"
-	LabelApp            = "liteboxd"
-	LabelSandboxID      = "sandbox-id"
-	AnnotationTTL       = "liteboxd/ttl"
-	AnnotationCreatedAt = "liteboxd/created-at"
+	DefaultSandboxNamespace = "liteboxd-sandbox"
+	DefaultControlNamespace = "liteboxd-system"
+	LabelApp                = "liteboxd"
+	LabelSandboxID          = "sandbox-id"
+	AnnotationTTL           = "liteboxd/ttl"
+	AnnotationCreatedAt     = "liteboxd/created-at"
 )
+
+type ClientConfig struct {
+	KubeconfigPath   string
+	SandboxNamespace string
+	ControlNamespace string
+}
+
+func (cfg ClientConfig) applyDefaults() ClientConfig {
+	if cfg.SandboxNamespace == "" {
+		cfg.SandboxNamespace = DefaultSandboxNamespace
+	}
+	if cfg.ControlNamespace == "" {
+		cfg.ControlNamespace = DefaultControlNamespace
+	}
+	return cfg
+}
 
 type Client struct {
 	clientset     *kubernetes.Clientset
 	dynamicClient dynamic.Interface
 	config        *rest.Config
+	sandboxNS     string
+	controlNS     string
 }
 
-func NewClient(kubeconfigPath string) (*Client, error) {
+func NewClient(cfg ClientConfig) (*Client, error) {
+	cfg = cfg.applyDefaults()
+
 	var config *rest.Config
 	var err error
 
-	if kubeconfigPath != "" {
-		config, err = clientcmd.BuildConfigFromFlags("", kubeconfigPath)
+	if cfg.KubeconfigPath != "" {
+		config, err = clientcmd.BuildConfigFromFlags("", cfg.KubeconfigPath)
 	} else {
 		config, err = rest.InClusterConfig()
 	}
@@ -65,6 +86,8 @@ func NewClient(kubeconfigPath string) (*Client, error) {
 		clientset:     clientset,
 		dynamicClient: dynamicClient,
 		config:        config,
+		sandboxNS:     cfg.SandboxNamespace,
+		controlNS:     cfg.ControlNamespace,
 	}, nil
 }
 
@@ -76,15 +99,23 @@ func (c *Client) GetDynamicClient() dynamic.Interface {
 	return c.dynamicClient
 }
 
+func (c *Client) SandboxNamespace() string {
+	return c.sandboxNS
+}
+
+func (c *Client) ControlNamespace() string {
+	return c.controlNS
+}
+
 func (c *Client) EnsureNamespace(ctx context.Context) error {
-	_, err := c.clientset.CoreV1().Namespaces().Get(ctx, SandboxNamespace, metav1.GetOptions{})
+	_, err := c.clientset.CoreV1().Namespaces().Get(ctx, c.sandboxNS, metav1.GetOptions{})
 	if err == nil {
 		return nil
 	}
 
 	ns := &corev1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: SandboxNamespace,
+			Name: c.sandboxNS,
 		},
 	}
 	_, err = c.clientset.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{})
@@ -204,7 +235,7 @@ func (c *Client) CreatePod(ctx context.Context, opts CreatePodOptions) (*corev1.
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        podName,
-			Namespace:   SandboxNamespace,
+			Namespace:   c.sandboxNS,
 			Labels:      labels,
 			Annotations: annotations,
 		},
@@ -241,23 +272,23 @@ func (c *Client) CreatePod(ctx context.Context, opts CreatePodOptions) (*corev1.
 		},
 	}
 
-	return c.clientset.CoreV1().Pods(SandboxNamespace).Create(ctx, pod, metav1.CreateOptions{})
+	return c.clientset.CoreV1().Pods(c.sandboxNS).Create(ctx, pod, metav1.CreateOptions{})
 }
 
 func (c *Client) GetPod(ctx context.Context, sandboxID string) (*corev1.Pod, error) {
 	podName := fmt.Sprintf("sandbox-%s", sandboxID)
-	return c.clientset.CoreV1().Pods(SandboxNamespace).Get(ctx, podName, metav1.GetOptions{})
+	return c.clientset.CoreV1().Pods(c.sandboxNS).Get(ctx, podName, metav1.GetOptions{})
 }
 
 func (c *Client) ListPods(ctx context.Context) (*corev1.PodList, error) {
-	return c.clientset.CoreV1().Pods(SandboxNamespace).List(ctx, metav1.ListOptions{
+	return c.clientset.CoreV1().Pods(c.sandboxNS).List(ctx, metav1.ListOptions{
 		LabelSelector: fmt.Sprintf("app=%s", LabelApp),
 	})
 }
 
 func (c *Client) DeletePod(ctx context.Context, sandboxID string) error {
 	podName := fmt.Sprintf("sandbox-%s", sandboxID)
-	return c.clientset.CoreV1().Pods(SandboxNamespace).Delete(ctx, podName, metav1.DeleteOptions{})
+	return c.clientset.CoreV1().Pods(c.sandboxNS).Delete(ctx, podName, metav1.DeleteOptions{})
 }
 
 type ExecResult struct {
@@ -272,7 +303,7 @@ func (c *Client) Exec(ctx context.Context, sandboxID string, command []string) (
 	req := c.clientset.CoreV1().RESTClient().Post().
 		Resource("pods").
 		Name(podName).
-		Namespace(SandboxNamespace).
+		Namespace(c.sandboxNS).
 		SubResource("exec").
 		VersionedParams(&corev1.PodExecOptions{
 			Container: "main",
@@ -336,7 +367,7 @@ func (c *Client) UploadFile(ctx context.Context, sandboxID string, destPath stri
 	req := c.clientset.CoreV1().RESTClient().Post().
 		Resource("pods").
 		Name(podName).
-		Namespace(SandboxNamespace).
+		Namespace(c.sandboxNS).
 		SubResource("exec").
 		VersionedParams(&corev1.PodExecOptions{
 			Container: "main",
@@ -373,7 +404,7 @@ func (c *Client) DownloadFile(ctx context.Context, sandboxID string, srcPath str
 	req := c.clientset.CoreV1().RESTClient().Post().
 		Resource("pods").
 		Name(podName).
-		Namespace(SandboxNamespace).
+		Namespace(c.sandboxNS).
 		SubResource("exec").
 		VersionedParams(&corev1.PodExecOptions{
 			Container: "main",
@@ -429,7 +460,7 @@ func (c *Client) GetLogs(ctx context.Context, sandboxID string, tailLines int64)
 		opts.TailLines = &tailLines
 	}
 
-	req := c.clientset.CoreV1().Pods(SandboxNamespace).GetLogs(podName, opts)
+	req := c.clientset.CoreV1().Pods(c.sandboxNS).GetLogs(podName, opts)
 	stream, err := req.Stream(ctx)
 	if err != nil {
 		return "", fmt.Errorf("failed to get logs: %w", err)
@@ -447,7 +478,7 @@ func (c *Client) GetLogs(ctx context.Context, sandboxID string, tailLines int64)
 func (c *Client) GetPodEvents(ctx context.Context, sandboxID string) ([]string, error) {
 	podName := fmt.Sprintf("sandbox-%s", sandboxID)
 
-	events, err := c.clientset.CoreV1().Events(SandboxNamespace).List(ctx, metav1.ListOptions{
+	events, err := c.clientset.CoreV1().Events(c.sandboxNS).List(ctx, metav1.ListOptions{
 		FieldSelector: fmt.Sprintf("involvedObject.name=%s", podName),
 	})
 	if err != nil {
@@ -505,7 +536,7 @@ func (c *Client) CreatePrepullDaemonSet(ctx context.Context, opts CreatePrepullD
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      jobName,
-			Namespace: SandboxNamespace,
+			Namespace: c.sandboxNS,
 			Labels: map[string]string{
 				"app":             LabelPrepull,
 				LabelPrepullImage: opts.ImageHash,
@@ -568,7 +599,7 @@ func (c *Client) CreatePrepullDaemonSet(ctx context.Context, opts CreatePrepullD
 		},
 	}
 
-	_, err = c.clientset.BatchV1().Jobs(SandboxNamespace).Create(ctx, job, metav1.CreateOptions{})
+	_, err = c.clientset.BatchV1().Jobs(c.sandboxNS).Create(ctx, job, metav1.CreateOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to create prepull job: %w", err)
 	}
@@ -579,12 +610,12 @@ func (c *Client) CreatePrepullDaemonSet(ctx context.Context, opts CreatePrepullD
 // GetPrepullDaemonSet retrieves a prepull Job by ID
 func (c *Client) GetPrepullDaemonSet(ctx context.Context, id string) (*batchv1.Job, error) {
 	jobName := fmt.Sprintf("prepull-%s", id)
-	return c.clientset.BatchV1().Jobs(SandboxNamespace).Get(ctx, jobName, metav1.GetOptions{})
+	return c.clientset.BatchV1().Jobs(c.sandboxNS).Get(ctx, jobName, metav1.GetOptions{})
 }
 
 // ListPrepullDaemonSets lists all prepull Jobs
 func (c *Client) ListPrepullDaemonSets(ctx context.Context) (*batchv1.JobList, error) {
-	return c.clientset.BatchV1().Jobs(SandboxNamespace).List(ctx, metav1.ListOptions{
+	return c.clientset.BatchV1().Jobs(c.sandboxNS).List(ctx, metav1.ListOptions{
 		LabelSelector: fmt.Sprintf("app=%s", LabelPrepull),
 	})
 }
@@ -592,7 +623,7 @@ func (c *Client) ListPrepullDaemonSets(ctx context.Context) (*batchv1.JobList, e
 // DeletePrepullDaemonSet deletes a prepull Job by ID
 func (c *Client) DeletePrepullDaemonSet(ctx context.Context, id string) error {
 	jobName := fmt.Sprintf("prepull-%s", id)
-	return c.clientset.BatchV1().Jobs(SandboxNamespace).Delete(ctx, jobName, metav1.DeleteOptions{})
+	return c.clientset.BatchV1().Jobs(c.sandboxNS).Delete(ctx, jobName, metav1.DeleteOptions{})
 }
 
 // PrepullStatus represents the status of a prepull operation
@@ -700,7 +731,7 @@ func (c *Client) WaitForReady(ctx context.Context, sandboxID string, probe *Prob
 		case <-ctx.Done():
 			return fmt.Errorf("timeout waiting for pod to be ready")
 		case <-ticker.C:
-			pod, err := c.clientset.CoreV1().Pods(SandboxNamespace).Get(ctx, podName, metav1.GetOptions{})
+			pod, err := c.clientset.CoreV1().Pods(c.sandboxNS).Get(ctx, podName, metav1.GetOptions{})
 			if err != nil {
 				return fmt.Errorf("failed to get pod: %w", err)
 			}
@@ -786,7 +817,7 @@ func (c *Client) ExecInteractive(ctx context.Context, sandboxID string, opts Exe
 	req := c.clientset.CoreV1().RESTClient().Post().
 		Resource("pods").
 		Name(podName).
-		Namespace(SandboxNamespace).
+		Namespace(c.sandboxNS).
 		SubResource("exec").
 		VersionedParams(&corev1.PodExecOptions{
 			Container: "main",
@@ -816,7 +847,7 @@ func (c *Client) ExecInteractive(ctx context.Context, sandboxID string, opts Exe
 // GetPodIP returns the IP address of a sandbox pod
 func (c *Client) GetPodIP(ctx context.Context, sandboxID string) (string, error) {
 	podName := fmt.Sprintf("sandbox-%s", sandboxID)
-	pod, err := c.clientset.CoreV1().Pods(SandboxNamespace).Get(ctx, podName, metav1.GetOptions{})
+	pod, err := c.clientset.CoreV1().Pods(c.sandboxNS).Get(ctx, podName, metav1.GetOptions{})
 	if err != nil {
 		return "", fmt.Errorf("failed to get pod: %w", err)
 	}
@@ -831,7 +862,7 @@ func (c *Client) GetPodIP(ctx context.Context, sandboxID string) (string, error)
 // GetPodAccessToken retrieves the access token from a pod's annotations
 func (c *Client) GetPodAccessToken(ctx context.Context, sandboxID string) (string, error) {
 	podName := fmt.Sprintf("sandbox-%s", sandboxID)
-	pod, err := c.clientset.CoreV1().Pods(SandboxNamespace).Get(ctx, podName, metav1.GetOptions{})
+	pod, err := c.clientset.CoreV1().Pods(c.sandboxNS).Get(ctx, podName, metav1.GetOptions{})
 	if err != nil {
 		return "", fmt.Errorf("failed to get pod: %w", err)
 	}

@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: liteboxd-config
+data:
+  SANDBOX_NAMESPACE: "liteboxd-sandbox"
+  CONTROL_NAMESPACE: "liteboxd-system"
+  API_PORT: "8080"
+  GATEWAY_PORT: "8081"
+  GATEWAY_URL: "http://liteboxd-gateway.liteboxd-system.svc.cluster.local:8081"

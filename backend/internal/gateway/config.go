@@ -3,6 +3,8 @@ package gateway
 import (
 	"os"
 	"time"
+
+	"github.com/fslongjin/liteboxd/backend/internal/k8s"
 )
 
 // Config holds the configuration for the gateway service
@@ -11,6 +13,10 @@ type Config struct {
 	Port string
 	// KubeconfigPath is the path to the kubeconfig file
 	KubeconfigPath string
+	// SandboxNamespace is the namespace where sandboxes run
+	SandboxNamespace string
+	// ControlNamespace is the namespace where control-plane services run
+	ControlNamespace string
 	// RequestTimeout is the timeout for proxying requests
 	RequestTimeout time.Duration
 	// ShutdownTimeout is the timeout for graceful shutdown
@@ -28,18 +34,24 @@ func LoadConfig() *Config {
 	}
 
 	kubeconfigPath := os.Getenv("KUBECONFIG")
-	if kubeconfigPath == "" {
-		home := os.Getenv("HOME")
-		kubeconfigPath = home + "/.kube/config"
+	sandboxNamespace := os.Getenv("SANDBOX_NAMESPACE")
+	if sandboxNamespace == "" {
+		sandboxNamespace = k8s.DefaultSandboxNamespace
+	}
+	controlNamespace := os.Getenv("CONTROL_NAMESPACE")
+	if controlNamespace == "" {
+		controlNamespace = k8s.DefaultControlNamespace
 	}
 
 	useK8sProxy := os.Getenv("DEV_USE_K8S_PROXY") == "true"
 
 	return &Config{
-		Port:            port,
-		KubeconfigPath:  kubeconfigPath,
-		RequestTimeout:  5 * time.Minute,
-		ShutdownTimeout: 30 * time.Second,
-		UseK8sProxy:     useK8sProxy,
+		Port:             port,
+		KubeconfigPath:   kubeconfigPath,
+		SandboxNamespace: sandboxNamespace,
+		ControlNamespace: controlNamespace,
+		RequestTimeout:   5 * time.Minute,
+		ShutdownTimeout:  30 * time.Second,
+		UseK8sProxy:      useK8sProxy,
 	}
 }

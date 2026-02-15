@@ -1,6 +1,6 @@
 .PHONY: help run-backend run-gateway run-frontend run-all \
 	build-backend build-gateway build-frontend build-sdk build-cli build-all \
-	clean fmt test test-sdk test-cli
+	clean fmt test test-sdk test-cli deploy-k8s port-forward-k8s
 
 # Output directory
 OUTPUT_DIR := $(PWD)/bin
@@ -23,6 +23,8 @@ help:
 	@echo "  make test                 - Run tests"
 	@echo "  make test-sdk             - Run SDK tests"
 	@echo "  make test-cli             - Run CLI tests"
+	@echo "  make deploy-k8s           - Deploy k8s manifests (REGISTRY required, TAG optional)"
+	@echo "  make port-forward-k8s     - One-command port-forward for API and gateway"
 
 # Development
 run-backend:
@@ -86,6 +88,19 @@ test-sdk:
 test-cli:
 	@echo "Running CLI tests..."
 	cd liteboxd-cli && go test ./...
+
+# Deployment
+deploy-k8s:
+	@echo "Deploying k8s manifests..."
+	@if [ -z "$(REGISTRY)" ]; then \
+		echo "Usage: make deploy-k8s REGISTRY=<registry> [TAG=<tag>]"; \
+		exit 1; \
+	fi
+	REGISTRY="$(REGISTRY)" TAG="$(TAG)" bash deploy/scripts/deploy-k8s.sh
+
+port-forward-k8s:
+	@echo "Starting k8s port-forward..."
+	bash deploy/scripts/port-forward-k8s.sh
 
 # Clean
 clean:

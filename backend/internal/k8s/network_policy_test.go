@@ -16,6 +16,8 @@ func newTestClient() *Client {
 	return &Client{
 		clientset:     nil,
 		dynamicClient: dynamicfake.NewSimpleDynamicClient(scheme),
+		sandboxNS:     DefaultSandboxNamespace,
+		controlNS:     DefaultControlNamespace,
 	}
 }
 
@@ -29,7 +31,7 @@ func TestApplyDomainAllowlistPolicyCreatesPolicy(t *testing.T) {
 		t.Fatalf("ApplyDomainAllowlistPolicy error: %v", err)
 	}
 
-	resource := client.dynamicClient.Resource(ciliumPolicyGVR).Namespace(SandboxNamespace)
+	resource := client.dynamicClient.Resource(ciliumPolicyGVR).Namespace(client.sandboxNS)
 	policy, err := resource.Get(ctx, domainAllowlistPolicyName("abc123"), metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("Get policy error: %v", err)
@@ -95,7 +97,7 @@ func TestDeleteDomainAllowlistPolicy(t *testing.T) {
 		t.Fatalf("DeleteDomainAllowlistPolicy error: %v", err)
 	}
 
-	resource := client.dynamicClient.Resource(ciliumPolicyGVR).Namespace(SandboxNamespace)
+	resource := client.dynamicClient.Resource(ciliumPolicyGVR).Namespace(client.sandboxNS)
 	_, err := resource.Get(ctx, domainAllowlistPolicyName("abc123"), metav1.GetOptions{})
 	if err == nil || !apierrors.IsNotFound(err) {
 		t.Fatalf("expected not found error, got %v", err)
@@ -112,7 +114,7 @@ func TestDomainAllowlistPolicyWithWildcard(t *testing.T) {
 		t.Fatalf("ApplyDomainAllowlistPolicy error: %v", err)
 	}
 
-	resource := client.dynamicClient.Resource(ciliumPolicyGVR).Namespace(SandboxNamespace)
+	resource := client.dynamicClient.Resource(ciliumPolicyGVR).Namespace(client.sandboxNS)
 	policy, err := resource.Get(ctx, domainAllowlistPolicyName("wildcard-test"), metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("Get policy error: %v", err)
@@ -149,7 +151,7 @@ func TestDomainAllowlistPolicyWithEmptyDomains(t *testing.T) {
 	}
 
 	// Verify no policy was created
-	resource := client.dynamicClient.Resource(ciliumPolicyGVR).Namespace(SandboxNamespace)
+	resource := client.dynamicClient.Resource(ciliumPolicyGVR).Namespace(client.sandboxNS)
 	_, err := resource.Get(ctx, domainAllowlistPolicyName("empty-test"), metav1.GetOptions{})
 	if err == nil {
 		t.Fatalf("expected policy not to be created with empty domains")

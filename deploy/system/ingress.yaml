@@ -1,0 +1,35 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: liteboxd
+  annotations:
+    # Keep websocket and long-running HTTP requests stable for interactive sessions.
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: liteboxd.local
+      http:
+        paths:
+          # Keep gateway route strict to avoid matching /api/v1/sandboxes.
+          - path: /api/v1/sandbox/
+            pathType: Prefix
+            backend:
+              service:
+                name: liteboxd-gateway
+                port:
+                  number: 8081
+          - path: /api/v1/sandbox
+            pathType: Exact
+            backend:
+              service:
+                name: liteboxd-gateway
+                port:
+                  number: 8081
+          - path: /api/v1
+            pathType: Prefix
+            backend:
+              service:
+                name: liteboxd-api
+                port:
+                  number: 8080

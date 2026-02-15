@@ -6,8 +6,10 @@
 
 | 文件/目录 | 描述 |
 |----------|------|
-| `gateway.yaml` | 网关服务的 K8s 部署文件 |
-| `network-policies/` | 网络策略定义 |
+| `system/` | 控制面部署（`liteboxd-system`），包含 api/gateway、PVC、RBAC |
+| `sandbox/` | 沙箱面部署（`liteboxd-sandbox`），包含 NetworkPolicy 与跨命名空间 RBAC |
+| `gateway.yaml` | 旧版单文件部署（已不推荐） |
+| `network-policies/` | 旧版网络策略目录（已不推荐） |
 
 ## 远程 K3s 集群准备
 
@@ -65,42 +67,126 @@ cilium connectivity test
 export KUBECONFIG=~/.kube/config
 ```
 
-## 生产部署
+## Phase1 部署（推荐）
 
 ### 1. 准备 K8s 集群
 
 确保集群支持 Network Policy（推荐使用 Cilium）。
 
-### 2. 部署后端服务
+### 1.1 构建并推送镜像（示例）
+
+**方式一：使用一键构建脚本（推荐）**
+
+在项目根目录执行，指定镜像仓库和标签：
 
 ```bash
-kubectl apply -f deploy/gateway.yaml
+# 仅构建
+REGISTRY=<your-registry> TAG=phase1 ./deploy/build.sh
+
+# 构建并推送
+REGISTRY=<your-registry> TAG=phase1 PUSH=true ./deploy/build.sh
 ```
 
-### 3. 部署网络策略
+`REGISTRY` 必填；`TAG` 默认 `latest`；`PUSH=true` 时会在构建后执行 `docker push`。
+
+**方式二：手动构建**
 
 ```bash
-kubectl apply -k deploy/network-policies/base/
+# API 镜像
+docker build -f backend/Dockerfile -t <your-registry>/liteboxd-server:phase1 ./backend
+docker push <your-registry>/liteboxd-server:phase1
+
+# Gateway 镜像
+docker build -f backend/Dockerfile.gateway -t <your-registry>/liteboxd-gateway:phase1 ./backend
+docker push <your-registry>/liteboxd-gateway:phase1
+```
+
+推荐使用脚本注入镜像，不改仓库 YAML：
+
+```bash
+REGISTRY=<your-registry> TAG=phase1 \
+bash deploy/scripts/deploy-k8s.sh
+```
+
+脚本会按固定镜像名自动拼接：
+
+- `${REGISTRY}/liteboxd-server:${TAG}`
+- `${REGISTRY}/liteboxd-gateway:${TAG}`
+
+并在临时 kustomize overlay 里覆盖后执行 `kubectl apply`，仓库内 `deploy/system/*.yaml` 不会被改动。
+
+### 2. 部署控制面
+
+```bash
+kubectl apply -k deploy/system/
+```
+
+### 3. 部署沙箱面（RBAC + 网络策略）
+
+```bash
+kubectl apply -k deploy/sandbox/
 ```
 
 ### 4. 验证部署
 
 ```bash
-# 检查网关服务
-kubectl get pods -n liteboxd -l app=liteboxd-gateway
+# 检查控制面服务
+kubectl get pods -n liteboxd-system
 
-# 检查网络策略
-kubectl get networkpolicy -n liteboxd
+# 检查沙箱命名空间策略
+kubectl get networkpolicy -n liteboxd-sandbox
+
+# 检查跨命名空间 RBAC 绑定
+kubectl get rolebinding -n liteboxd-sandbox
 ```
+
+## 从集群外访问
+
+当前 `deploy/system` 中 `liteboxd-api` 与 `liteboxd-gateway` 都是 `ClusterIP`，默认仅集群内可达。  
+可选两种方式：
+
+### 方式 A：Ingress（推荐）
+
+`deploy/system/ingress.yaml` 已提供示例路由（k3s 默认 Traefik）：
+
+- `/api/v1/sandbox/*` -> `liteboxd-gateway:8081`
+- `/api/v1/*` -> `liteboxd-api:8080`
+
+默认 host 为 `liteboxd.local`，请按你的环境改成真实域名。
+
+如果要让创建沙箱后返回的 `accessUrl` 可被外部访问，请把 `deploy/system/configmap.yaml` 里的 `GATEWAY_URL` 改成外部地址，例如：
+
+```yaml
+GATEWAY_URL: "https://liteboxd.example.com"
+```
+
+### 方式 B：一键端口转发（开发调试）
+
+```bash
+make port-forward-k8s
+```
+
+或直接执行脚本：
+
+```bash
+bash deploy/scripts/port-forward-k8s.sh
+```
+
+默认会转发：
+
+- `http://127.0.0.1:8080` -> `liteboxd-api:8080`
+- `http://127.0.0.1:8081` -> `liteboxd-gateway:8081`
 
 ## 环境变量
 
 | 变量 | 默认值 | 描述 |
 |------|--------|------|
-| `KUBECONFIG` | ~/.kube/config | Kubeconfig 文件路径 |
+| `KUBECONFIG` | 空 | 本地调试时可设置；Pod 内默认使用 in-cluster 配置 |
+| `CONTROL_NAMESPACE` | liteboxd-system | 控制面命名空间 |
+| `SANDBOX_NAMESPACE` | liteboxd-sandbox | 沙箱命名空间 |
 | `PORT` | 8080 | API 服务端口 |
-| `GATEWAY_PORT` | 8081 | 网关服务端口 |
-| `GATEWAY_URL` | http://localhost:8080 | 网关外部访问 URL |
+| `PORT` (gateway) | 8081 | 网关服务端口 |
+| `GATEWAY_URL` | http://liteboxd-gateway.liteboxd-system.svc.cluster.local:8081 | API 返回给客户端的网关访问地址 |
 | `DATA_DIR` | ./data | 数据目录 |
 
 ## 故障排查
@@ -118,21 +204,21 @@ cilium status
 cilium status
 
 # 查看策略列表
-kubectl get networkpolicy -n liteboxd -o yaml
+kubectl get networkpolicy -n liteboxd-sandbox -o yaml
 
 # 检查 Pod 标签
-kubectl get pods -n liteboxd --show-labels
+kubectl get pods -n liteboxd-sandbox --show-labels
 ```
 
 ### 网关无法访问沙箱
 
 ```bash
 # 检查网络策略
-kubectl get networkpolicy -n liteboxd
+kubectl get networkpolicy -n liteboxd-sandbox
 
 # 检查网关 Pod 状态
-kubectl get pods -n liteboxd -l app=liteboxd-gateway
+kubectl get pods -n liteboxd-system -l app=liteboxd-gateway
 
 # 测试沙箱网络连通性
-kubectl exec -it <pod-name> -n liteboxd -- sh
+kubectl exec -it <pod-name> -n liteboxd-sandbox -- sh
 ```

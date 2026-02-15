@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: liteboxd-api
+spec:
+  selector:
+    app: liteboxd-api
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+      protocol: TCP
+  type: ClusterIP

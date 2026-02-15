@@ -1,0 +1,76 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: liteboxd-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: liteboxd-api
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: liteboxd-api
+    spec:
+      serviceAccountName: liteboxd-api
+      containers:
+        - name: api
+          image: liteboxd/server:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+              name: http
+          env:
+            - name: PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: liteboxd-config
+                  key: API_PORT
+            - name: DATA_DIR
+              value: /app/data
+            - name: SANDBOX_NAMESPACE
+              valueFrom:
+                configMapKeyRef:
+                  name: liteboxd-config
+                  key: SANDBOX_NAMESPACE
+            - name: CONTROL_NAMESPACE
+              valueFrom:
+                configMapKeyRef:
+                  name: liteboxd-config
+                  key: CONTROL_NAMESPACE
+            - name: GATEWAY_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: liteboxd-config
+                  key: GATEWAY_URL
+          volumeMounts:
+            - name: data
+              mountPath: /app/data
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: liteboxd-api-data

@@ -19,7 +19,11 @@ func main() {
 	config := gateway.LoadConfig()
 
 	// Create k8s client
-	k8sClient, err := k8s.NewClient(config.KubeconfigPath)
+	k8sClient, err := k8s.NewClient(k8s.ClientConfig{
+		KubeconfigPath:   config.KubeconfigPath,
+		SandboxNamespace: config.SandboxNamespace,
+		ControlNamespace: config.ControlNamespace,
+	})
 	if err != nil {
 		log.Fatalf("Failed to create k8s client: %v", err)
 	}

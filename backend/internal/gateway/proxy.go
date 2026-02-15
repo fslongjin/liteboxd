@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fslongjin/liteboxd/backend/internal/k8s"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 	"k8s.io/client-go/rest"
@@ -69,7 +68,7 @@ func (s *Service) ProxyHandler(c *gin.Context) {
 
 			// K8s API Proxy path
 			k8sProxyPath := fmt.Sprintf("/api/v1/namespaces/%s/pods/%s:%s/proxy%s",
-				k8s.SandboxNamespace, podName, port, realPath)
+				s.k8sClient.SandboxNamespace(), podName, port, realPath)
 
 			req.URL.Path = k8sProxyPath
 
@@ -189,7 +188,7 @@ func (s *Service) handleWebSocketUpgrade(c *gin.Context, target *url.URL) {
 		k8sConfig := s.k8sClient.GetConfig()
 		podName := fmt.Sprintf("sandbox-%s", sandboxID)
 		k8sProxyPath := fmt.Sprintf("/api/v1/namespaces/%s/pods/%s:%s/proxy%s",
-			k8s.SandboxNamespace, podName, port, realPath)
+			s.k8sClient.SandboxNamespace(), podName, port, realPath)
 		backendURL = &url.URL{
 			Scheme:   wsSchemeFromTarget(target),
 			Host:     target.Host,
