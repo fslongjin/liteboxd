@@ -115,7 +115,11 @@ https://docs.cilium.io/en/stable/installation/k3s/
 ```bash
 curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC='--flannel-backend=none --disable-network-policy' sh -
 export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
-cilium install --version 1.18.6 --set=ipam.operator.clusterPoolIPv4PodCIDRList="10.42.0.0/16"
+cilium install --version 1.18.6 \
+  --set ipam.operator.clusterPoolIPv4PodCIDRList="10.42.0.0/16" \
+  --set egressGateway.enabled=true \
+  --set bpf.masquerade=true \
+  --set kubeProxyReplacement=true
 ```
 
 ### 3.1.2 网络策略持久化保证
@@ -453,7 +457,11 @@ type CreateSandboxRequest struct {
 ```
 
 ```bash
-cilium install --version 1.18.6 --set=ipam.operator.clusterPoolIPv4PodCIDRList="10.42.0.0/16"
+cilium install --version 1.18.6 \
+  --set ipam.operator.clusterPoolIPv4PodCIDRList="10.42.0.0/16" \
+  --set egressGateway.enabled=true \
+  --set bpf.masquerade=true \
+  --set kubeProxyReplacement=true
 ```
 
 ### 6.3 远程集群接入

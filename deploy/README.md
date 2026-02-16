@@ -27,8 +27,10 @@ curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC='--flannel-backend=none --disabl
 
 ### 安装 K3s Agent（可选）
 
+NODE_TOKEN可以在主节点上找到: /var/lib/rancher/k3s/server/node-token
+
 ```bash
-curl -sfL https://get.k3s.io | K3S_URL='https://${MASTER_IP}:6443' K3S_TOKEN=${NODE_TOKEN} sh -
+curl -sfL https://get.k3s.io | K3S_URL=https://${MASTER_IP}:6443 K3S_TOKEN=${NODE_TOKEN} sh -
 ```
 
 ### 配置 KUBECONFIG
@@ -50,7 +52,11 @@ rm cilium-linux-${CLI_ARCH}.tar.gz{,.sha256sum}
 ```
 
 ```bash
-cilium install --version 1.18.6 --set=ipam.operator.clusterPoolIPv4PodCIDRList="10.42.0.0/16"
+cilium install --version 1.18.6 \
+  --set ipam.operator.clusterPoolIPv4PodCIDRList="10.42.0.0/16" \
+  --set egressGateway.enabled=true \
+  --set bpf.masquerade=true \
+  --set kubeProxyReplacement=true
 ```
 
 ### 验证集群
@@ -58,6 +64,31 @@ cilium install --version 1.18.6 --set=ipam.operator.clusterPoolIPv4PodCIDRList="
 ```bash
 cilium status --wait
 cilium connectivity test
+kubectl get crd | grep -i ciliumegressgateway
+```
+
+### 已安装集群启用 Egress Gateway（升级方式）
+
+如果你已经安装了 Cilium（例如此前只设置了 `ipam.operator.clusterPoolIPv4PodCIDRList`），可以直接升级开启：
+
+```bash
+cilium upgrade --version 1.18.6 \
+  --reuse-values \
+  --set egressGateway.enabled=true \
+  --set bpf.masquerade=true \
+  --set kubeProxyReplacement=true
+
+kubectl rollout restart ds cilium -n kube-system
+kubectl rollout restart deploy cilium-operator -n kube-system
+
+```
+
+升级后检查：
+
+```bash
+cilium status --wait
+kubectl get crd | grep -i ciliumegressgateway
+kubectl api-resources | grep -i CiliumEgressGatewayPolicy
 ```
 
 ## 连接远程集群
@@ -127,6 +158,25 @@ kubectl apply -k deploy/system/
 ```bash
 kubectl apply -k deploy/sandbox/
 ```
+
+### 3.1 可选：启用沙箱统一公网出口（Egress Gateway + ZeroTier 隧道）
+
+如需让 `allowInternetAccess=true` 的沙箱流量统一经 ZeroTier 隧道到云服务器出公网：
+
+```
+Sandbox Pod -> Cilium Egress Gateway 节点 -> ZeroTier 隧道 -> 云服务器出口 -> Internet
+```
+
+需先完成云服务器和 egress 节点的 ZeroTier + 路由配置，然后按需执行：
+
+```bash
+kubectl apply -k deploy/sandbox/egress-gateway/
+```
+
+详细方案与配置步骤见：
+
+- 完整方案设计：`docs/sandbox-network/egress-gateway-plan.md`
+- 部署说明：`deploy/sandbox/egress-gateway/README.md`
 
 ### 4. 验证部署
 

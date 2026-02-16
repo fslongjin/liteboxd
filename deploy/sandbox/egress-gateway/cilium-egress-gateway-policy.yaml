@@ -1,0 +1,44 @@
+# Cilium Egress Gateway policy for LiteBoxd sandboxes.
+# This is a cluster-scoped resource (no namespace field in metadata).
+#
+# Traffic path:
+#   Sandbox Pod -> Cilium SNAT (egressIP) -> ZeroTier tunnel -> Cloud server -> Internet
+#
+# The egressIP MUST be the ZeroTier IP of the egress node.
+# Cilium SNATs matching pod traffic to this IP, which triggers source-based
+# policy routing on the egress node to forward through the ZeroTier tunnel.
+#
+# Prerequisites:
+#   1. Cloud server: ZeroTier + ip_forward + iptables MASQUERADE configured
+#   2. Egress node: ZeroTier + policy routing (ip rule from <egressIP> table zerotier-egress)
+#   3. Egress node labeled: liteboxd.io/role=egress
+#
+# Multi-node scaling:
+#   egressGateway only supports one node. To add more egress nodes, either:
+#   - Use egressGateways (list) if your Cilium version supports it (check CRD)
+#   - Or create separate CiliumEgressGatewayPolicy per node
+#
+# See docs/sandbox-network/egress-gateway-plan.md for full setup guide.
+apiVersion: cilium.io/v2
+kind: CiliumEgressGatewayPolicy
+metadata:
+  name: liteboxd-sandbox-egress-via-node
+spec:
+  selectors:
+    - podSelector:
+        matchLabels:
+          app: liteboxd
+          liteboxd.io/internet-access: "true"
+  destinationCIDRs:
+    - 0.0.0.0/0
+  excludedCIDRs:
+    - 10.0.0.0/8
+    - 172.16.0.0/12
+    - 192.168.0.0/16
+    - 127.0.0.0/8
+    - 169.254.0.0/16
+  egressGateway:
+    nodeSelector:
+      matchLabels:
+        kubernetes.io/hostname: <egress-node-hostname>
+    egressIP: <egress-node-zt-ip>

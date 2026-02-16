@@ -10,6 +10,7 @@
 | [implementation-plan.md](./implementation-plan.md) | 分阶段实现计划，包含任务清单和验收标准 |
 | [websocket-proxy-plan.md](./websocket-proxy-plan.md) | 网关 WebSocket 透传方案与实现细节 |
 | [domain-whitelist-plan.md](./domain-whitelist-plan.md) | 出网域名白名单方案与实现细节 |
+| [egress-gateway-plan.md](./egress-gateway-plan.md) | 沙箱公网统一经集群内 Egress Gateway 节点出站方案 |
 | [network-policies/](./network-policies/) | Kubernetes Network Policy 资源示例 |
 
 ## 快速概览
