@@ -35,7 +35,11 @@
 ```bash
 curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC='--flannel-backend=none --disable-network-policy' sh -
 export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
-cilium install --version 1.18.6 --set=ipam.operator.clusterPoolIPv4PodCIDRList="10.42.0.0/16"
+cilium install --version 1.18.6 \
+  --set ipam.operator.clusterPoolIPv4PodCIDRList="10.42.0.0/16" \
+  --set egressGateway.enabled=true \
+  --set bpf.masquerade=true \
+  --set kubeProxyReplacement=true
 cilium status --wait
 ```
 
