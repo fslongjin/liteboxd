@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/fslongjin/liteboxd/backend/internal/logx"
 	"github.com/gin-gonic/gin"
 )
 
@@ -16,9 +17,12 @@ const (
 // AuthMiddleware creates authentication middleware for the gateway
 func (s *Service) AuthMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
+		logger := logx.LoggerWithRequestID(c.Request.Context()).With("component", "gateway_auth")
+
 		// Extract sandbox ID from URL path
 		sandboxID := c.Param(sandboxIDParam)
 		if sandboxID == "" {
+			logger.Warn("missing sandbox id")
 			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{
 				"error": "sandbox ID is required",
 			})
@@ -28,6 +32,7 @@ func (s *Service) AuthMiddleware() gin.HandlerFunc {
 		// Extract access token from header
 		token := c.GetHeader(authorizationHeader)
 		if token == "" {
+			logger.Warn("missing access token", "sandbox_id", sandboxID)
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
 				"error": "missing access token",
 			})
@@ -37,6 +42,7 @@ func (s *Service) AuthMiddleware() gin.HandlerFunc {
 		// Verify token against pod annotation
 		storedToken, err := s.k8sClient.GetPodAccessToken(c.Request.Context(), sandboxID)
 		if err != nil {
+			logger.Warn("sandbox not found during auth", "sandbox_id", sandboxID, "error", err)
 			c.AbortWithStatusJSON(http.StatusNotFound, gin.H{
 				"error": "sandbox not found",
 			})
@@ -45,12 +51,14 @@ func (s *Service) AuthMiddleware() gin.HandlerFunc {
 
 		// Compare tokens
 		if token != storedToken {
+			logger.Warn("invalid access token", "sandbox_id", sandboxID)
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
 				"error": "invalid access token",
 			})
 			return
 		}
 
+		logger.Debug("gateway auth success", "sandbox_id", sandboxID)
 		// Token is valid, proceed to next handler
 		c.Next()
 	}

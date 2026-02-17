@@ -5,10 +5,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
 	"github.com/fslongjin/liteboxd/backend/internal/k8s"
+	"github.com/fslongjin/liteboxd/backend/internal/logx"
 	"github.com/fslongjin/liteboxd/backend/internal/model"
 	"github.com/fslongjin/liteboxd/backend/internal/store"
 )
@@ -151,6 +153,8 @@ func (s *PrepullService) Delete(ctx context.Context, id string) error {
 
 // updateStatusFromK8s updates the prepull status from K8s DaemonSet status
 func (s *PrepullService) updateStatusFromK8s(ctx context.Context, prepull *model.ImagePrepull) {
+	logger := logx.LoggerWithRequestID(ctx).With("component", "prepull_service", "prepull_id", prepull.ID)
+
 	status, err := s.k8sClient.GetPrepullStatus(ctx, prepull.ID)
 	if err != nil {
 		// DaemonSet might have been deleted or not found
@@ -158,15 +162,17 @@ func (s *PrepullService) updateStatusFromK8s(ctx context.Context, prepull *model
 			prepull.Status = model.PrepullStatusFailed
 			prepull.Error = "DaemonSet not found"
 			s.store.UpdateStatus(ctx, prepull.ID, model.PrepullStatusFailed, 0, 0, "DaemonSet not found")
-			fmt.Printf("Prepull %s: DaemonSet not found\n", prepull.ID)
+			logger.Warn("daemonset not found while updating prepull status")
 		} else {
-			fmt.Printf("Prepull %s: failed to get status: %v\n", prepull.ID, err)
+			logger.Error("failed to get prepull status", "error", err)
 		}
 		return
 	}
 
-	fmt.Printf("Prepull %s: %d/%d nodes ready, complete=%v\n",
-		prepull.ID, status.ReadyNodes, status.DesiredNodes, status.IsComplete)
+	logger.Log(ctx, slog.LevelDebug, "prepull status updated",
+		"ready_nodes", status.ReadyNodes,
+		"desired_nodes", status.DesiredNodes,
+		"is_complete", status.IsComplete)
 
 	prepull.ReadyNodes = status.ReadyNodes
 	prepull.TotalNodes = status.DesiredNodes
@@ -176,7 +182,7 @@ func (s *PrepullService) updateStatusFromK8s(ctx context.Context, prepull *model
 		prepull.Status = model.PrepullStatusCompleted
 		prepull.CompletedAt = &now
 		s.store.UpdateStatus(ctx, prepull.ID, model.PrepullStatusCompleted, status.ReadyNodes, status.DesiredNodes, "")
-		fmt.Printf("Prepull %s: completed\n", prepull.ID)
+		logger.Info("prepull completed", "ready_nodes", status.ReadyNodes, "desired_nodes", status.DesiredNodes)
 	} else {
 		s.store.UpdateStatus(ctx, prepull.ID, model.PrepullStatusPulling, status.ReadyNodes, status.DesiredNodes, "")
 	}
@@ -202,11 +208,12 @@ func (s *PrepullService) StartStatusUpdater(interval time.Duration) {
 
 func (s *PrepullService) updateAllActiveStatuses() {
 	ctx := context.Background()
+	logger := slog.Default().With("component", "prepull_status_updater")
 
 	// Get all pending and pulling prepulls
 	pendingItems, err := s.store.List(ctx, "", string(model.PrepullStatusPending))
 	if err != nil {
-		fmt.Printf("Prepull status updater: failed to list pending prepulls: %v\n", err)
+		logger.Error("failed to list pending prepulls", "error", err)
 	} else {
 		for i := range pendingItems {
 			s.updateStatusFromK8s(ctx, &pendingItems[i])
@@ -215,7 +222,7 @@ func (s *PrepullService) updateAllActiveStatuses() {
 
 	pullingItems, err := s.store.List(ctx, "", string(model.PrepullStatusPulling))
 	if err != nil {
-		fmt.Printf("Prepull status updater: failed to list pulling prepulls: %v\n", err)
+		logger.Error("failed to list pulling prepulls", "error", err)
 	} else {
 		for i := range pullingItems {
 			s.updateStatusFromK8s(ctx, &pullingItems[i])
@@ -236,7 +243,8 @@ func (s *PrepullService) CleanupCompletedPrepulls(ctx context.Context, olderThan
 			// Delete DaemonSet but keep database record
 			err := s.k8sClient.DeletePrepullDaemonSet(ctx, item.ID)
 			if err != nil && !strings.Contains(err.Error(), "not found") {
-				fmt.Printf("Failed to cleanup prepull DaemonSet %s: %v\n", item.ID, err)
+				logx.LoggerWithRequestID(ctx).With("component", "prepull_service", "prepull_id", item.ID).
+					Warn("failed to cleanup prepull daemonset", "error", err)
 			}
 		}
 	}
