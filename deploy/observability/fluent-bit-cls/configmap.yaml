@@ -1,0 +1,61 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fluent-bit-cls-config
+data:
+  CLS_ENDPOINT: "ap-guangzhou.cls.tencentcs.com"
+  CLS_TOPIC_ID: "REPLACE_WITH_CLS_TOPIC_ID"
+  fluent-bit.conf: |
+    [SERVICE]
+        Flush             1
+        Daemon            Off
+        Log_Level         info
+        Parsers_File      parsers.conf
+        Plugins_File      plugins.conf
+        HTTP_Server       On
+        HTTP_Listen       0.0.0.0
+        HTTP_Port         2020
+
+    [INPUT]
+        Name              tail
+        Path              /var/log/containers/*_liteboxd-system_*.log
+        Tag               kube.liteboxd.*
+        Parser            cri
+        DB                /var/log/flb_liteboxd.db
+        Mem_Buf_Limit     10MB
+        Skip_Long_Lines   On
+        Refresh_Interval  5
+
+    [FILTER]
+        Name                kubernetes
+        Match               kube.liteboxd.*
+        Kube_Tag_Prefix     kube.var.log.containers.
+        Merge_Log           On
+        Keep_Log            Off
+        K8S-Logging.Parser  On
+        K8S-Logging.Exclude Off
+
+    [FILTER]
+        Name    grep
+        Match   kube.liteboxd.*
+        Regex   $kubernetes['labels']['app'] ^liteboxd-(api|gateway)$
+
+    [OUTPUT]
+        Name                fluent-bit-go-cls
+        Match               kube.liteboxd.*
+        TopicID             ${CLS_TOPIC_ID}
+        CLSEndPoint         ${CLS_ENDPOINT}
+        AccessKeyID         ${CLS_SECRET_ID}
+        AccessKeySecret     ${CLS_SECRET_KEY}
+
+  plugins.conf: |
+    [PLUGINS]
+        Path /fluent-bit/plugins/fluent-bit-go.so
+
+  parsers.conf: |
+    [PARSER]
+        Name         cri
+        Format       regex
+        Regex        ^(?<time>[^ ]+) (?<stream>stdout|stderr) (?<logtag>[^ ]*) (?<log>.*)$
+        Time_Key     time
+        Time_Format  %Y-%m-%dT%H:%M:%S.%L%z

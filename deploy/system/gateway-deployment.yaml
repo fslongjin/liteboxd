@@ -44,6 +44,21 @@ spec:
                   key: CONTROL_NAMESPACE
             - name: SHUTDOWN_TIMEOUT
               value: 120s
+            - name: LOG_LEVEL
+              valueFrom:
+                configMapKeyRef:
+                  name: liteboxd-config
+                  key: LOG_LEVEL
+            - name: LOG_FORMAT
+              valueFrom:
+                configMapKeyRef:
+                  name: liteboxd-config
+                  key: LOG_FORMAT
+            - name: LOG_OUTPUT
+              valueFrom:
+                configMapKeyRef:
+                  name: liteboxd-config
+                  key: LOG_OUTPUT
           resources:
             requests:
               cpu: 100m

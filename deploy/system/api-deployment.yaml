@@ -51,6 +51,21 @@ spec:
                   key: GATEWAY_URL
             - name: SHUTDOWN_TIMEOUT
               value: 120s
+            - name: LOG_LEVEL
+              valueFrom:
+                configMapKeyRef:
+                  name: liteboxd-config
+                  key: LOG_LEVEL
+            - name: LOG_FORMAT
+              valueFrom:
+                configMapKeyRef:
+                  name: liteboxd-config
+                  key: LOG_FORMAT
+            - name: LOG_OUTPUT
+              valueFrom:
+                configMapKeyRef:
+                  name: liteboxd-config
+                  key: LOG_OUTPUT
           volumeMounts:
             - name: data
               mountPath: /app/data
