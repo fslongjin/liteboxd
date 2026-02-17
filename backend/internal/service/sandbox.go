@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"strconv"
 	"sync"
 	"time"
 
 	"github.com/fslongjin/liteboxd/backend/internal/k8s"
+	"github.com/fslongjin/liteboxd/backend/internal/logx"
 	"github.com/fslongjin/liteboxd/backend/internal/model"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
@@ -193,8 +195,9 @@ func (s *SandboxService) Create(ctx context.Context, req *model.CreateSandboxReq
 	sandbox.AccessURL = accessURL
 
 	// Run post-creation tasks asynchronously (wait for ready, upload files, exec startup script)
+	bgCtx := logx.WithRequestID(context.Background(), logx.RequestIDFromContext(ctx))
 	go func() {
-		s.runPostCreationTasks(context.Background(), id, probe, files, startupScript, startupTimeout)
+		s.runPostCreationTasks(bgCtx, id, probe, files, startupScript, startupTimeout)
 	}()
 
 	return sandbox, nil
@@ -203,12 +206,14 @@ func (s *SandboxService) Create(ctx context.Context, req *model.CreateSandboxReq
 // runPostCreationTasks runs tasks after pod creation in the background.
 // Order: startup script first (so services like nginx can listen), then wait for ready (probe), then upload files.
 func (s *SandboxService) runPostCreationTasks(ctx context.Context, id string, probe *k8s.ProbeSpec, files []k8s.FileSpec, startupScript string, startupTimeout int) {
+	logger := logx.LoggerWithRequestID(ctx).With("component", "sandbox_service", "sandbox_id", id)
+
 	// Execute startup script first if specified (e.g. start nginx), so readiness probe can succeed
 	if startupScript != "" {
-		execCtx, execCancel := context.WithTimeout(context.Background(), 60*time.Second)
+		execCtx, execCancel := context.WithTimeout(logx.WithRequestID(context.Background(), logx.RequestIDFromContext(ctx)), 60*time.Second)
 		defer execCancel()
 		if _, err := s.k8sClient.Exec(execCtx, id, []string{"sh", "-c", startupScript}); err != nil {
-			fmt.Printf("Post-creation: startup script failed for pod %s: %v\n", id, err)
+			logger.Warn("post-creation startup script failed", "error", err)
 		}
 	}
 
@@ -217,18 +222,18 @@ func (s *SandboxService) runPostCreationTasks(ctx context.Context, id string, pr
 	defer cancel()
 	if err := s.k8sClient.WaitForReady(readyCtx, id, probe); err != nil {
 		// Pod created but not ready - log the error
-		fmt.Printf("Post-creation: pod %s not ready: %v\n", id, err)
+		logger.Warn("post-creation pod not ready", "error", err)
 		return
 	}
 
 	// Upload files if specified
 	if len(files) > 0 {
 		if err := s.k8sClient.UploadFiles(ctx, id, files); err != nil {
-			fmt.Printf("Post-creation: failed to upload files to pod %s: %v\n", id, err)
+			logger.Warn("post-creation file upload failed", "error", err)
 		}
 	}
 
-	fmt.Printf("Post-creation tasks completed for pod %s\n", id)
+	logger.Info("post-creation tasks completed")
 }
 
 func (s *SandboxService) Get(ctx context.Context, id string) (*model.Sandbox, error) {
@@ -266,7 +271,8 @@ func (s *SandboxService) List(ctx context.Context) (*model.SandboxListResponse, 
 func (s *SandboxService) Delete(ctx context.Context, id string) error {
 	netPolicyMgr := k8s.NewNetworkPolicyManager(s.k8sClient)
 	if err := netPolicyMgr.DeleteDomainAllowlistPolicy(ctx, id); err != nil {
-		fmt.Printf("failed to delete domain allowlist policy for sandbox %s: %v\n", id, err)
+		logx.LoggerWithRequestID(ctx).With("component", "sandbox_service", "sandbox_id", id).
+			Warn("failed to delete domain allowlist policy", "error", err)
 	}
 	return s.k8sClient.DeletePod(ctx, id)
 }
@@ -421,22 +427,23 @@ func (s *SandboxService) StartTTLCleaner(interval time.Duration) {
 
 func (s *SandboxService) cleanExpiredSandboxes() {
 	ctx := context.Background()
+	logger := slog.Default().With("component", "sandbox_ttl_cleaner")
 	pods, err := s.k8sClient.ListPods(ctx)
 	if err != nil {
-		fmt.Printf("TTL cleaner: failed to list pods: %v\n", err)
+		logger.Error("failed to list pods", "error", err)
 		return
 	}
 
 	for _, pod := range pods.Items {
 		if s.isExpired(&pod) {
 			sandboxID := pod.Labels[k8s.LabelSandboxID]
-			fmt.Printf("TTL cleaner: deleting expired sandbox %s\n", sandboxID)
+			logger.Info("deleting expired sandbox", "sandbox_id", sandboxID)
 			netPolicyMgr := k8s.NewNetworkPolicyManager(s.k8sClient)
 			if err := netPolicyMgr.DeleteDomainAllowlistPolicy(ctx, sandboxID); err != nil {
-				fmt.Printf("TTL cleaner: failed to delete domain allowlist policy for sandbox %s: %v\n", sandboxID, err)
+				logger.Warn("failed to delete domain allowlist policy", "sandbox_id", sandboxID, "error", err)
 			}
 			if err := s.k8sClient.DeletePod(ctx, sandboxID); err != nil {
-				fmt.Printf("TTL cleaner: failed to delete pod %s: %v\n", sandboxID, err)
+				logger.Warn("failed to delete pod", "sandbox_id", sandboxID, "error", err)
 			}
 		}
 	}

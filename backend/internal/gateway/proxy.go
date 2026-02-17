@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fslongjin/liteboxd/backend/internal/logx"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 	"k8s.io/client-go/rest"
@@ -15,7 +16,10 @@ import (
 
 // ProxyHandler handles proxying requests to sandbox pods
 func (s *Service) ProxyHandler(c *gin.Context) {
+	logger := logx.LoggerWithRequestID(c.Request.Context()).With("component", "gateway_proxy")
+
 	if s.drainState != nil && s.drainState.IsDraining() {
+		logger.Warn("proxy request rejected while draining")
 		c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{
 			"error": "service is draining",
 		})
@@ -24,11 +28,13 @@ func (s *Service) ProxyHandler(c *gin.Context) {
 
 	sandboxID := c.Param(sandboxIDParam)
 	port := c.GetString("port")
+	logger = logger.With("sandbox_id", sandboxID, "port", port)
 
 	var targetURL *url.URL
 	var proxy *httputil.ReverseProxy
 
 	if s.config.UseK8sProxy {
+		logger.Debug("using k8s apiserver proxy mode")
 		// Use K8s API Server proxy
 		// URL format: /api/v1/namespaces/{namespace}/pods/{name}:{port}/proxy/{path}
 		podName := fmt.Sprintf("sandbox-%s", sandboxID)
@@ -93,6 +99,7 @@ func (s *Service) ProxyHandler(c *gin.Context) {
 		// 避免自建 tls.Config 时未加载 kubeconfig 中的 CA 导致 "certificate signed by unknown authority"。
 		transport, err := rest.TransportFor(k8sConfig)
 		if err != nil {
+			logger.Error("failed to build k8s transport", "error", err)
 			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
 				"error": "failed to build k8s transport: " + err.Error(),
 			})
@@ -101,11 +108,13 @@ func (s *Service) ProxyHandler(c *gin.Context) {
 		proxy.Transport = transport
 
 	} else {
+		logger.Debug("using direct pod ip proxy mode")
 		// Direct Pod IP mode (Original logic)
 
 		// Get pod IP
 		podIP, err := s.k8sClient.GetPodIP(c.Request.Context(), sandboxID)
 		if err != nil {
+			logger.Warn("sandbox not found for proxy", "error", err)
 			c.AbortWithStatusJSON(http.StatusNotFound, gin.H{
 				"error": "sandbox not found",
 			})
@@ -166,10 +175,12 @@ func (s *Service) ProxyHandler(c *gin.Context) {
 
 	// Handle WebSocket upgrade if needed
 	if isWebSocketUpgrade(c.Request) {
+		logger.Debug("detected websocket upgrade request")
 		s.handleWebSocketUpgrade(c, targetURL)
 		return
 	}
 
+	logger.Debug("proxying http request", "target", targetURL.String())
 	// Serve the proxied request
 	proxy.ServeHTTP(c.Writer, c.Request)
 }
@@ -177,7 +188,14 @@ func (s *Service) ProxyHandler(c *gin.Context) {
 // handleWebSocketUpgrade handles WebSocket upgrade requests
 // Note: Full WebSocket support requires additional libraries like gorilla/websocket
 func (s *Service) handleWebSocketUpgrade(c *gin.Context, target *url.URL) {
+	logger := logx.LoggerWithRequestID(c.Request.Context()).With(
+		"component", "gateway_proxy",
+		"sandbox_id", c.Param(sandboxIDParam),
+		"port", c.GetString("port"),
+	)
+
 	if target == nil {
+		logger.Error("missing target for websocket proxy")
 		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
 			"error": "missing target for websocket proxy",
 		})
@@ -208,6 +226,7 @@ func (s *Service) handleWebSocketUpgrade(c *gin.Context, target *url.URL) {
 		}
 		roundTripper, err := rest.TransportFor(k8sConfig)
 		if err != nil {
+			logger.Error("failed to build k8s transport for websocket", "error", err)
 			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
 				"error": "failed to build k8s transport: " + err.Error(),
 			})
@@ -215,6 +234,7 @@ func (s *Service) handleWebSocketUpgrade(c *gin.Context, target *url.URL) {
 		}
 		transport, ok := roundTripper.(*http.Transport)
 		if !ok {
+			logger.Error("unexpected k8s transport type for websocket")
 			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
 				"error": "failed to build k8s transport: unexpected transport type",
 			})
@@ -246,6 +266,7 @@ func (s *Service) handleWebSocketUpgrade(c *gin.Context, target *url.URL) {
 		if resp != nil {
 			status = resp.StatusCode
 		}
+		logger.Warn("failed to connect backend websocket", "status", status, "error", err)
 		c.AbortWithStatusJSON(status, gin.H{
 			"error": "failed to connect to backend websocket: " + err.Error(),
 		})
@@ -264,6 +285,7 @@ func (s *Service) handleWebSocketUpgrade(c *gin.Context, target *url.URL) {
 
 	clientConn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
+		logger.Warn("failed to upgrade client websocket", "error", err)
 		return
 	}
 	defer clientConn.Close()
@@ -273,6 +295,7 @@ func (s *Service) handleWebSocketUpgrade(c *gin.Context, target *url.URL) {
 		release = s.drainState.TrackWebSocket()
 	}
 	defer release()
+	logger.Info("websocket proxy connected", "target", backendURL.String())
 
 	errChan := make(chan error, 2)
 	go func() {
@@ -284,8 +307,11 @@ func (s *Service) handleWebSocketUpgrade(c *gin.Context, target *url.URL) {
 
 	select {
 	case <-c.Request.Context().Done():
+		logger.Debug("websocket proxy context canceled")
 	case <-errChan:
+		logger.Debug("websocket relay finished")
 	}
+	logger.Info("websocket proxy disconnected")
 }
 
 // isWebSocketUpgrade checks if the request is a WebSocket upgrade request
