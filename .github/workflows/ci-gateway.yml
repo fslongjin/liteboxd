@@ -1,0 +1,61 @@
+name: CI Gateway
+
+on:
+  pull_request:
+    paths:
+      - "backend/cmd/gateway/**"
+      - "backend/internal/gateway/**"
+      - ".github/workflows/ci-gateway.yml"
+      - "backend/go.mod"
+      - "backend/go.sum"
+  push:
+    paths:
+      - "backend/cmd/gateway/**"
+      - "backend/internal/gateway/**"
+      - ".github/workflows/ci-gateway.yml"
+      - "backend/go.mod"
+      - "backend/go.sum"
+  workflow_dispatch:
+
+jobs:
+  gateway:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Check fmt
+        shell: bash
+        run: |
+          files=$(git ls-files 'backend/cmd/gateway/**/*.go' 'backend/internal/gateway/**/*.go' 'backend/cmd/gateway/*.go' 'backend/internal/gateway/*.go')
+          if [ -z "$files" ]; then
+            echo "No gateway Go files to check."
+            exit 0
+          fi
+          out=$(gofmt -l $files)
+          if [ -n "$out" ]; then
+            echo "These files are not gofmt formatted:"
+            echo "$out"
+            exit 1
+          fi
+
+      - name: Build gateway
+        run: go build ./cmd/gateway
+
+      - name: Test gateway packages
+        shell: bash
+        run: |
+          packages=$(go list ./cmd/gateway ./internal/gateway/...)
+          go test $packages

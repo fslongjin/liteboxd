@@ -1,0 +1,63 @@
+name: CI Backend
+
+on:
+  pull_request:
+    paths:
+      - "backend/**"
+      - "!backend/cmd/gateway/**"
+      - "!backend/internal/gateway/**"
+      - ".github/workflows/ci-backend.yml"
+  push:
+    paths:
+      - "backend/**"
+      - "!backend/cmd/gateway/**"
+      - "!backend/internal/gateway/**"
+      - ".github/workflows/ci-backend.yml"
+  workflow_dispatch:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Check fmt (non-gateway)
+        shell: bash
+        run: |
+          files=$(git ls-files '*.go' ':!:backend/cmd/gateway/**' ':!:backend/internal/gateway/**' | rg '^backend/' || true)
+          if [ -z "$files" ]; then
+            echo "No backend Go files to check."
+            exit 0
+          fi
+          out=$(gofmt -l $files)
+          if [ -n "$out" ]; then
+            echo "These files are not gofmt formatted:"
+            echo "$out"
+            exit 1
+          fi
+
+      - name: Build backend
+        run: go build ./cmd/server
+
+      - name: Test backend (non-gateway)
+        shell: bash
+        run: |
+          packages=$(go list ./... | rg -v '/cmd/gateway$|/internal/gateway($|/)' || true)
+          if [ -z "$packages" ]; then
+            echo "No backend packages to test."
+            exit 0
+          fi
+          go test $packages
