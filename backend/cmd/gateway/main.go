@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -12,10 +13,25 @@ import (
 	"github.com/fslongjin/liteboxd/backend/internal/gateway"
 	"github.com/fslongjin/liteboxd/backend/internal/k8s"
 	"github.com/fslongjin/liteboxd/backend/internal/lifecycle"
+	"github.com/fslongjin/liteboxd/backend/internal/logx"
 	"github.com/gin-gonic/gin"
 )
 
 func main() {
+	logger, closeLogger, err := logx.Init("liteboxd-gateway")
+	if err != nil {
+		log.Fatalf("Failed to initialize logger: %v", err)
+	}
+	defer func() {
+		if err := closeLogger(); err != nil {
+			slog.Error("failed to close logger", "error", err)
+		}
+	}()
+
+	stdLog := slog.NewLogLogger(logger.Handler(), slog.LevelInfo)
+	log.SetFlags(0)
+	log.SetOutput(stdLog.Writer())
+
 	// Load configuration
 	config := gateway.LoadConfig()
 
@@ -40,12 +56,17 @@ func main() {
 	svc := gateway.NewService(k8sClient, config, drainState)
 
 	// Set Gin mode
-	gin.SetMode(gin.ReleaseMode)
+	if logger.Enabled(context.Background(), slog.LevelDebug) {
+		gin.SetMode(gin.DebugMode)
+	} else {
+		gin.SetMode(gin.ReleaseMode)
+	}
 
 	// Create router
 	r := gin.New()
 	r.Use(gin.Recovery())
-	r.Use(gin.Logger())
+	r.Use(logx.RequestIDMiddleware())
+	r.Use(logx.AccessLogMiddleware("gateway_http"))
 	r.Use(func(c *gin.Context) {
 		if drainState.IsDraining() && c.Request.URL.Path != "/health" && c.Request.URL.Path != "/readyz" {
 			c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"error": "service is draining"})
@@ -68,7 +89,7 @@ func main() {
 
 	// Start server in a goroutine
 	go func() {
-		log.Printf("Gateway server starting on port %s", config.Port)
+		slog.Info("gateway server starting", "component", "http_server", "port", config.Port)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Server failed to start: %v", err)
 		}

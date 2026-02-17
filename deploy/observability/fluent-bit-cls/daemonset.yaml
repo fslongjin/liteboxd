@@ -1,0 +1,73 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: fluent-bit-cls
+spec:
+  selector:
+    matchLabels:
+      app: fluent-bit-cls
+  template:
+    metadata:
+      labels:
+        app: fluent-bit-cls
+    spec:
+      serviceAccountName: fluent-bit-cls
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: fluent-bit
+          image: REPLACE_WITH_FLUENT_BIT_CLS_IMAGE
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: CLS_SECRET_ID
+              valueFrom:
+                secretKeyRef:
+                  name: cls-credentials
+                  key: secretId
+            - name: CLS_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: cls-credentials
+                  key: secretKey
+            - name: CLS_ENDPOINT
+              valueFrom:
+                configMapKeyRef:
+                  name: fluent-bit-cls-config
+                  key: CLS_ENDPOINT
+            - name: CLS_TOPIC_ID
+              valueFrom:
+                configMapKeyRef:
+                  name: fluent-bit-cls-config
+                  key: CLS_TOPIC_ID
+          ports:
+            - containerPort: 2020
+              name: http-metrics
+          volumeMounts:
+            - name: varlog
+              mountPath: /var/log
+            - name: fluent-bit-config
+              mountPath: /fluent-bit/etc/fluent-bit.conf
+              subPath: fluent-bit.conf
+              readOnly: true
+            - name: fluent-bit-config
+              mountPath: /fluent-bit/etc/plugins.conf
+              subPath: plugins.conf
+              readOnly: true
+            - name: fluent-bit-config
+              mountPath: /fluent-bit/etc/parsers.conf
+              subPath: parsers.conf
+              readOnly: true
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+      volumes:
+        - name: varlog
+          hostPath:
+            path: /var/log
+        - name: fluent-bit-config
+          configMap:
+            name: fluent-bit-cls-config

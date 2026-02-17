@@ -8,6 +8,7 @@
 |----------|------|
 | `system/` | 控制面部署（`liteboxd-system`），包含 api/gateway、PVC、RBAC |
 | `sandbox/` | 沙箱面部署（`liteboxd-sandbox`），包含 NetworkPolicy 与跨命名空间 RBAC |
+| `observability/fluent-bit-cls/` | 日志采集部署（Fluent Bit DaemonSet -> 腾讯云 CLS） |
 | `rolling-upgrade.md` | 控制面滚动升级操作指南（升级、验证、回滚） |
 | `gateway.yaml` | 旧版单文件部署（已不推荐） |
 | `network-policies/` | 旧版网络策略目录（已不推荐） |
@@ -190,6 +191,14 @@ kubectl get networkpolicy -n liteboxd-sandbox
 # 检查跨命名空间 RBAC 绑定
 kubectl get rolebinding -n liteboxd-sandbox
 ```
+
+### 5. 可选：部署日志采集（Fluent Bit -> CLS）
+
+```bash
+kubectl apply -k deploy/observability/fluent-bit-cls/
+```
+
+详细步骤见：`deploy/observability/fluent-bit-cls/README.md`
 
 ## 从集群外访问
 

@@ -2,8 +2,8 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -14,6 +14,7 @@ import (
 	"github.com/fslongjin/liteboxd/backend/internal/handler"
 	"github.com/fslongjin/liteboxd/backend/internal/k8s"
 	"github.com/fslongjin/liteboxd/backend/internal/lifecycle"
+	"github.com/fslongjin/liteboxd/backend/internal/logx"
 	"github.com/fslongjin/liteboxd/backend/internal/service"
 	"github.com/fslongjin/liteboxd/backend/internal/store"
 	"github.com/gin-contrib/cors"
@@ -21,6 +22,20 @@ import (
 )
 
 func main() {
+	logger, closeLogger, err := logx.Init("liteboxd-server")
+	if err != nil {
+		log.Fatalf("Failed to initialize logger: %v", err)
+	}
+	defer func() {
+		if err := closeLogger(); err != nil {
+			slog.Error("failed to close logger", "error", err)
+		}
+	}()
+
+	stdLog := slog.NewLogLogger(logger.Handler(), slog.LevelInfo)
+	log.SetFlags(0)
+	log.SetOutput(stdLog.Writer())
+
 	// Initialize SQLite database
 	dataDir := os.Getenv("DATA_DIR")
 	if dataDir == "" {
@@ -28,12 +43,12 @@ func main() {
 	}
 	dbPath := filepath.Join(dataDir, "liteboxd.db")
 
-	fmt.Printf("Initializing database at %s\n", dbPath)
+	slog.Info("initializing database", "component", "store", "db_path", dbPath)
 	if err := store.InitDB(dbPath); err != nil {
 		log.Fatalf("Failed to initialize database: %v", err)
 	}
 	defer store.CloseDB()
-	fmt.Println("Database initialized")
+	slog.Info("database initialized", "component", "store")
 
 	kubeconfigPath := os.Getenv("KUBECONFIG")
 	sandboxNamespace := os.Getenv("SANDBOX_NAMESPACE")
@@ -58,15 +73,15 @@ func main() {
 	if err := k8sClient.EnsureNamespace(ctx); err != nil {
 		log.Fatalf("Failed to ensure namespace: %v", err)
 	}
-	fmt.Printf("Namespace '%s' ensured\n", k8sClient.SandboxNamespace())
+	slog.Info("sandbox namespace ensured", "component", "k8s", "namespace", k8sClient.SandboxNamespace())
 
 	// Ensure network policies are applied
 	netPolicyMgr := k8s.NewNetworkPolicyManager(k8sClient)
 	if err := netPolicyMgr.EnsureDefaultPolicies(ctx); err != nil {
-		log.Printf("Warning: Failed to ensure network policies: %v", err)
-		log.Println("Network policies may not be properly configured. Cilium may not be installed.")
+		slog.Warn("failed to ensure network policies", "component", "k8s", "error", err)
+		slog.Warn("network policies may not be properly configured", "component", "k8s")
 	} else {
-		fmt.Println("Network policies ensured")
+		slog.Info("network policies ensured", "component", "k8s")
 	}
 
 	// Create services
@@ -78,10 +93,10 @@ func main() {
 	templateSvc.SetPrepullService(prepullSvc)
 
 	sandboxSvc.StartTTLCleaner(30 * time.Second)
-	fmt.Println("TTL cleaner started (interval: 30s)")
+	slog.Info("ttl cleaner started", "component", "sandbox_service", "interval", "30s")
 
 	prepullSvc.StartStatusUpdater(10 * time.Second)
-	fmt.Println("Prepull status updater started (interval: 10s)")
+	slog.Info("prepull status updater started", "component", "prepull_service", "interval", "10s")
 
 	// Start cleanup for completed prepull DaemonSets
 	go func() {
@@ -100,7 +115,10 @@ func main() {
 	prepullHandler := handler.NewPrepullHandler(prepullSvc, templateSvc)
 	importExportHandler := handler.NewImportExportHandler(importExportSvc)
 
-	r := gin.Default()
+	r := gin.New()
+	r.Use(gin.Recovery())
+	r.Use(logx.RequestIDMiddleware())
+	r.Use(logx.AccessLogMiddleware("api_http"))
 
 	r.Use(cors.New(cors.Config{
 		AllowOrigins:     []string{"*"},
@@ -156,7 +174,7 @@ func main() {
 	}
 
 	go func() {
-		fmt.Printf("Server starting on port %s\n", port)
+		slog.Info("api server starting", "component", "http_server", "port", port)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Failed to start server: %v", err)
 		}
