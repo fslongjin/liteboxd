@@ -26,6 +26,11 @@ https://docs.cilium.io/en/stable/installation/k3s/
 curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC='--flannel-backend=none --disable-network-policy' sh -
 ```
 
+> 如需绑定域名，添加 `--tls-san=your.domain.com` 参数，例如：
+> ```bash
+> curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC='--flannel-backend=none --disable-network-policy --tls-san=your.domain.com' sh -
+> ```
+
 ### 安装 K3s Agent（可选）
 
 NODE_TOKEN可以在主节点上找到: /var/lib/rancher/k3s/server/node-token
