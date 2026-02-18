@@ -30,6 +30,7 @@ fi
 REGISTRY="${REGISTRY%/}"
 API_IMAGE="${REGISTRY}/liteboxd-server:${TAG}"
 GATEWAY_IMAGE="${REGISTRY}/liteboxd-gateway:${TAG}"
+WEB_IMAGE="${REGISTRY}/web:${TAG}"
 
 echo "[Build] API image: ${API_IMAGE}"
 docker build -f backend/Dockerfile -t "${API_IMAGE}" ./backend
@@ -37,12 +38,17 @@ docker build -f backend/Dockerfile -t "${API_IMAGE}" ./backend
 echo "[Build] Gateway image: ${GATEWAY_IMAGE}"
 docker build -f backend/Dockerfile.gateway -t "${GATEWAY_IMAGE}" ./backend
 
+echo "[Build] Web image: ${WEB_IMAGE}"
+docker build -f web/Dockerfile -t "${WEB_IMAGE}" ./web
+
 if [[ "${PUSH}" == "true" || "${PUSH}" == "1" ]]; then
   echo "[Push] ${API_IMAGE}"
   docker push "${API_IMAGE}"
   echo "[Push] ${GATEWAY_IMAGE}"
   docker push "${GATEWAY_IMAGE}"
+  echo "[Push] ${WEB_IMAGE}"
+  docker push "${WEB_IMAGE}"
 fi
 
-echo "[Build] Done. Images: ${API_IMAGE}, ${GATEWAY_IMAGE}"
+echo "[Build] Done. Images: ${API_IMAGE}, ${GATEWAY_IMAGE}, ${WEB_IMAGE}"
 echo "Deploy with: REGISTRY=${REGISTRY} TAG=${TAG} ./deploy/scripts/deploy-k8s.sh"

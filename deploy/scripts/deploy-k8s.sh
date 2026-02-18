@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DEPLOY_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 KUBECTL_BIN="${KUBECTL_BIN:-kubectl}"
 APPLY_SANDBOX="${APPLY_SANDBOX:-true}"
 REGISTRY="${REGISTRY:-}"
@@ -29,6 +30,7 @@ fi
 REGISTRY="${REGISTRY%/}"
 API_IMAGE="${REGISTRY}/liteboxd-server:${TAG}"
 GATEWAY_IMAGE="${REGISTRY}/liteboxd-gateway:${TAG}"
+WEB_IMAGE="${REGISTRY}/web:${TAG}"
 
 TMP_DIR="$(mktemp -d)"
 cleanup() {
@@ -36,8 +38,13 @@ cleanup() {
 }
 trap cleanup EXIT
 
+if [[ ! -d "${DEPLOY_DIR}/system" ]]; then
+  echo "Error: system manifests not found at ${DEPLOY_DIR}/system" >&2
+  exit 1
+fi
+
 # Use a temp workspace with relative paths; kubectl -k may reject absolute resource paths.
-cp -R "${ROOT_DIR}/deploy/system" "${TMP_DIR}/system"
+cp -R "${DEPLOY_DIR}/system" "${TMP_DIR}/system"
 
 cat > "${TMP_DIR}/kustomization.yaml" <<KUSTOM
 apiVersion: kustomize.config.k8s.io/v1beta1
@@ -59,14 +66,25 @@ patches:
       - op: replace
         path: /spec/template/spec/containers/0/image
         value: ${GATEWAY_IMAGE}
+  - target:
+      kind: Deployment
+      name: liteboxd-web
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/image
+        value: ${WEB_IMAGE}
 KUSTOM
 
 echo "[Deploy] Applying control-plane manifests with runtime image overrides..."
 "${KUBECTL_BIN}" apply -k "${TMP_DIR}"
 
 if [[ "${APPLY_SANDBOX}" == "true" ]]; then
+  if [[ ! -d "${DEPLOY_DIR}/sandbox" ]]; then
+    echo "Error: sandbox manifests not found at ${DEPLOY_DIR}/sandbox" >&2
+    exit 1
+  fi
   echo "[Deploy] Applying sandbox manifests..."
-  "${KUBECTL_BIN}" apply -k "${ROOT_DIR}/deploy/sandbox"
+  "${KUBECTL_BIN}" apply -k "${DEPLOY_DIR}/sandbox"
 fi
 
 echo "[Deploy] Done."

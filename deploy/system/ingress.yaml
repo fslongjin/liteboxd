@@ -13,6 +13,14 @@ spec:
     - host: liteboxd.local
       http:
         paths:
+          # Web frontend (catch-all route, must be last)
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: liteboxd-web
+                port:
+                  number: 80
           # Keep gateway route strict to avoid matching /api/v1/sandboxes.
           - path: /api/v1/sandbox/
             pathType: Prefix
