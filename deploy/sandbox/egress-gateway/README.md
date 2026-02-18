@@ -28,6 +28,7 @@ cilium upgrade --version 1.18.6 \
   --reuse-values \
   --set egressGateway.enabled=true \
   --set bpf.masquerade=true \
+  --set "devices={enp1s0,zt4xyqdgpe}" \ # 这里换成你的本地网卡、zerotier网卡的名称
   --set kubeProxyReplacement=true
 ```
 
@@ -96,6 +97,7 @@ curl -s ifconfig.me
 
 1. `allowInternetAccess=false` 的沙箱仍无法访问公网。
 2. DNS 与网关入站能力不受影响。
+3. `allowInternetAccess=true` 的沙箱可以访问公网任意端口和协议（TCP/UDP/ICMP 等），不受端口限制。
 
 ### 链路验证
 
