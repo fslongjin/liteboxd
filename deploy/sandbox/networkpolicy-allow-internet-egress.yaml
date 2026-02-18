@@ -19,11 +19,6 @@ spec:
               - 192.168.0.0/16
               - 127.0.0.0/8
               - 169.254.0.0/16
-      ports:
-        - protocol: TCP
-          port: 443
-        - protocol: TCP
-          port: 80
     - to:
         - namespaceSelector:
             matchLabels:
