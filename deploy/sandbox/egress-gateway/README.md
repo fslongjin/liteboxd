@@ -51,6 +51,37 @@ cilium upgrade --version 1.18.6 \
 - 策略路由已配置（`ip rule from <egress-zt-ip> table zerotier-egress`）
 - 策略路由已通过 systemd 持久化
 
+#### 2.2.1 ZeroTier 多网卡场景：关闭 rp_filter（重要）
+
+在 egress gateway 节点上，如果同时存在物理网卡（如 `enp1s0`）和 ZeroTier 网卡（如 `zt*`），可能出现回包被 Linux 反向路径过滤（`rp_filter`）丢弃，表现为：
+
+- Ingress/Service 间歇性超时或请求悬挂
+- Cilium `Cluster health` 出现 `1/2 reachable`
+- 跨节点 Pod 连通性不稳定
+
+建议在 **egress gateway 节点** 将相关网卡的 `rp_filter` 关闭：
+
+```bash
+# 临时生效（重启后失效）
+sudo sysctl -w net.ipv4.conf.all.rp_filter=0
+sudo sysctl -w net.ipv4.conf.default.rp_filter=0
+sudo sysctl -w net.ipv4.conf.enp1s0.rp_filter=0
+sudo sysctl -w net.ipv4.conf.zt4xyqdgpe.rp_filter=0
+```
+
+持久化配置（按你的实际网卡名替换）：
+
+```bash
+cat <<'EOF' | sudo tee /etc/sysctl.d/99-k8s-multihome.conf
+net.ipv4.conf.all.rp_filter=0
+net.ipv4.conf.default.rp_filter=0
+net.ipv4.conf.enp1s0.rp_filter=0
+net.ipv4.conf.zt4xyqdgpe.rp_filter=0
+EOF
+
+sudo sysctl --system
+```
+
 ### 2.3 给出口节点打标签
 
 ```bash
