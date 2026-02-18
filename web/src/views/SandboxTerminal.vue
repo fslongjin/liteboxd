@@ -42,6 +42,34 @@ let fitAddon: FitAddon | null = null
 let ws: WebSocket | null = null
 let resizeObserver: ResizeObserver | null = null
 
+function isCopyShortcut(event: KeyboardEvent): boolean {
+  const key = event.key.toLowerCase()
+  return (event.ctrlKey || event.metaKey) && event.shiftKey && key === 'c'
+}
+
+async function copyTerminalSelection(event: KeyboardEvent): Promise<void> {
+  const selection = terminal?.getSelection()
+  if (!selection) return
+
+  event.preventDefault()
+  event.stopPropagation()
+
+  try {
+    await navigator.clipboard.writeText(selection)
+  } catch {
+    // Clipboard API may be blocked by browser policy; fallback to execCommand.
+    const textarea = document.createElement('textarea')
+    textarea.value = selection
+    textarea.setAttribute('readonly', 'true')
+    textarea.style.position = 'fixed'
+    textarea.style.opacity = '0'
+    document.body.appendChild(textarea)
+    textarea.select()
+    document.execCommand('copy')
+    document.body.removeChild(textarea)
+  }
+}
+
 // Update window title
 document.title = `Terminal - ${sandboxId}`
 
@@ -84,6 +112,14 @@ function connect() {
   terminal.loadAddon(new WebLinksAddon())
 
   terminal.open(terminalRef.value)
+  terminal.attachCustomKeyEventHandler((event: KeyboardEvent) => {
+    if (event.type !== 'keydown') return true
+    if (isCopyShortcut(event)) {
+      void copyTerminalSelection(event)
+      return false
+    }
+    return true
+  })
 
   // Fit after a small delay to ensure the container is properly sized
   setTimeout(() => {
