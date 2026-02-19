@@ -35,7 +35,10 @@
 ```bash
 curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC='--flannel-backend=none --disable-network-policy' sh -
 export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+export K8S_API_SERVER=<k3s-server-ip-or-domain>
 cilium install --version 1.18.6 \
+  --set k8sServiceHost="${K8S_API_SERVER}" \
+  --set k8sServicePort=6443 \
   --set ipam.operator.clusterPoolIPv4PodCIDRList="10.42.0.0/16" \
   --set egressGateway.enabled=true \
   --set bpf.masquerade=true \

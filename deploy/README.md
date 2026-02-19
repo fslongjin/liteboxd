@@ -24,9 +24,12 @@ https://docs.cilium.io/en/stable/installation/k3s/
 
 ```bash
 curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC='--flannel-backend=none --disable-network-policy' sh -
+
+# 国内节点
+curl -sfL https://rancher-mirror.rancher.cn/k3s/k3s-install.sh | INSTALL_K3S_MIRROR=cn INSTALL_K3S_EXEC='--flannel-backend=none --disable-network-policy' sh -
 ```
 
-> 如需绑定域名，添加 `--tls-san=your.domain.com` 参数，例如：
+> （推荐）如需绑定域名，添加 `--tls-san=your.domain.com` 参数，例如：
 > ```bash
 > curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC='--flannel-backend=none --disable-network-policy --tls-san=your.domain.com' sh -
 > ```
@@ -37,12 +40,21 @@ NODE_TOKEN可以在主节点上找到: /var/lib/rancher/k3s/server/node-token
 
 ```bash
 curl -sfL https://get.k3s.io | K3S_URL=https://${MASTER_IP}:6443 K3S_TOKEN=${NODE_TOKEN} sh -
+
+# 国内节点
+curl -sfL https://rancher-mirror.rancher.cn/k3s/k3s-install.sh | INSTALL_K3S_MIRROR=cn K3S_URL=https://${MASTER_IP}:6443 K3S_TOKEN=${NODE_TOKEN} sh -
+
 ```
 
 ### 配置 KUBECONFIG
 
+首先将 `/etc/rancher/k3s/k3s.yaml` 里的 server 地址从 `127.0.0.1` 改为所有节点都可达的地址（主节点 IP 或域名）。
+否则后续 Cilium 在多节点场景可能会错误连接 `127.0.0.1:6443`，导致子节点初始化失败。
+
+如果使用域名，K3s Server 安装时必须包含 `--tls-san=<your.domain.com>`，并确保各节点能解析该域名。
 ```bash
 export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+export K8S_API_SERVER=<k3s-server-ip-or-domain>
 ```
 
 ### 安装 Cilium
@@ -59,6 +71,8 @@ rm cilium-linux-${CLI_ARCH}.tar.gz{,.sha256sum}
 
 ```bash
 cilium install --version 1.18.6 \
+  --set k8sServiceHost="${K8S_API_SERVER}" \
+  --set k8sServicePort=6443 \
   --set ipam.operator.clusterPoolIPv4PodCIDRList="10.42.0.0/16" \
   --set egressGateway.enabled=true \
   --set bpf.masquerade=true \
