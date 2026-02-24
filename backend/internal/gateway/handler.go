@@ -5,22 +5,25 @@ import (
 
 	"github.com/fslongjin/liteboxd/backend/internal/k8s"
 	"github.com/fslongjin/liteboxd/backend/internal/lifecycle"
+	"github.com/fslongjin/liteboxd/backend/internal/store"
 	"github.com/gin-gonic/gin"
 )
 
 // Service is the gateway service
 type Service struct {
-	k8sClient  *k8s.Client
-	config     *Config
-	drainState *lifecycle.DrainManager
+	k8sClient    *k8s.Client
+	sandboxStore *store.SandboxStore
+	config       *Config
+	drainState   *lifecycle.DrainManager
 }
 
 // NewService creates a new gateway service
-func NewService(k8sClient *k8s.Client, config *Config, drainState *lifecycle.DrainManager) *Service {
+func NewService(k8sClient *k8s.Client, sandboxStore *store.SandboxStore, config *Config, drainState *lifecycle.DrainManager) *Service {
 	return &Service{
-		k8sClient:  k8sClient,
-		config:     config,
-		drainState: drainState,
+		k8sClient:    k8sClient,
+		sandboxStore: sandboxStore,
+		config:       config,
+		drainState:   drainState,
 	}
 }
 

@@ -15,6 +15,7 @@ import (
 	"github.com/fslongjin/liteboxd/backend/internal/k8s"
 	"github.com/fslongjin/liteboxd/backend/internal/lifecycle"
 	"github.com/fslongjin/liteboxd/backend/internal/logx"
+	"github.com/fslongjin/liteboxd/backend/internal/security"
 	"github.com/fslongjin/liteboxd/backend/internal/service"
 	"github.com/fslongjin/liteboxd/backend/internal/store"
 	"github.com/gin-contrib/cors"
@@ -88,7 +89,13 @@ func main() {
 	templateSvc := service.NewTemplateService()
 	prepullSvc := service.NewPrepullService(k8sClient)
 	importExportSvc := service.NewImportExportService(templateSvc, prepullSvc)
-	sandboxSvc := service.NewSandboxService(k8sClient)
+	tokenCipher, err := security.NewTokenCipherFromEnv()
+	if err != nil {
+		log.Fatalf("Failed to initialize token cipher: %v", err)
+	}
+	sandboxStore := store.NewSandboxStore()
+	sandboxSvc := service.NewSandboxService(k8sClient, sandboxStore, tokenCipher)
+	reconcileSvc := service.NewSandboxReconcileService(k8sClient, sandboxStore)
 	sandboxSvc.SetTemplateService(templateSvc)
 	templateSvc.SetPrepullService(prepullSvc)
 
@@ -97,6 +104,14 @@ func main() {
 
 	prepullSvc.StartStatusUpdater(10 * time.Second)
 	slog.Info("prepull status updater started", "component", "prepull_service", "interval", "10s")
+	reconcileSvc.Start(1 * time.Minute)
+	slog.Info("sandbox reconciler started", "component", "sandbox_reconciler", "interval", "1m")
+
+	go func() {
+		if _, err := reconcileSvc.Run(context.Background(), "startup"); err != nil {
+			slog.Warn("startup reconcile failed", "component", "sandbox_reconciler", "error", err)
+		}
+	}()
 
 	// Start cleanup for completed prepull DaemonSets
 	go func() {
@@ -110,7 +125,7 @@ func main() {
 	drainState := lifecycle.NewDrainManager()
 
 	// Create handlers
-	sandboxHandler := handler.NewSandboxHandler(sandboxSvc, drainState)
+	sandboxHandler := handler.NewSandboxHandler(sandboxSvc, reconcileSvc, drainState)
 	templateHandler := handler.NewTemplateHandler(templateSvc)
 	prepullHandler := handler.NewPrepullHandler(prepullSvc, templateSvc)
 	importExportHandler := handler.NewImportExportHandler(importExportSvc)

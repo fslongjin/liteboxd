@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/fslongjin/liteboxd/backend/internal/k8s"
 	"github.com/fslongjin/liteboxd/backend/internal/lifecycle"
 	"github.com/fslongjin/liteboxd/backend/internal/logx"
+	"github.com/fslongjin/liteboxd/backend/internal/store"
 	"github.com/gin-gonic/gin"
 )
 
@@ -35,6 +37,17 @@ func main() {
 	// Load configuration
 	config := gateway.LoadConfig()
 
+	// Initialize SQLite database for sandbox metadata lookup.
+	dataDir := os.Getenv("DATA_DIR")
+	if dataDir == "" {
+		dataDir = "./data"
+	}
+	dbPath := filepath.Join(dataDir, "liteboxd.db")
+	if err := store.InitDB(dbPath); err != nil {
+		log.Fatalf("Failed to initialize database: %v", err)
+	}
+	defer store.CloseDB()
+
 	// Create k8s client
 	k8sClient, err := k8s.NewClient(k8s.ClientConfig{
 		KubeconfigPath:   config.KubeconfigPath,
@@ -53,7 +66,7 @@ func main() {
 
 	// Create gateway service
 	drainState := lifecycle.NewDrainManager()
-	svc := gateway.NewService(k8sClient, config, drainState)
+	svc := gateway.NewService(k8sClient, store.NewSandboxStore(), config, drainState)
 
 	// Set Gin mode
 	if logger.Enabled(context.Background(), slog.LevelDebug) {

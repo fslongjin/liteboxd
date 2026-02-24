@@ -8,6 +8,8 @@ data:
   API_PORT: "8080"
   GATEWAY_PORT: "8081"
   GATEWAY_URL: "http://liteboxd-gateway.liteboxd-system.svc.cluster.local:8081"
+  SANDBOX_TOKEN_ENCRYPTION_KEY: "0123456789abcdef0123456789abcdef"
+  SANDBOX_TOKEN_ENCRYPTION_KEY_ID: "v1"
   LOG_LEVEL: "info"
   LOG_FORMAT: "json"
   LOG_OUTPUT: "stdout"

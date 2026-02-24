@@ -132,5 +132,111 @@ func createTables() error {
 		}
 	}
 
+	// Create sandboxes table
+	_, err = DB.Exec(`
+		CREATE TABLE IF NOT EXISTS sandboxes (
+			id TEXT PRIMARY KEY,
+			template_name TEXT NOT NULL,
+			template_version INTEGER NOT NULL,
+			image TEXT NOT NULL,
+			cpu TEXT NOT NULL,
+			memory TEXT NOT NULL,
+			ttl INTEGER NOT NULL,
+			env_json TEXT NOT NULL DEFAULT '{}',
+			desired_state TEXT NOT NULL DEFAULT 'active',
+			lifecycle_status TEXT NOT NULL,
+			status_reason TEXT NOT NULL DEFAULT '',
+			cluster_namespace TEXT NOT NULL,
+			pod_name TEXT NOT NULL,
+			pod_uid TEXT NOT NULL DEFAULT '',
+			pod_phase TEXT NOT NULL DEFAULT '',
+			pod_ip TEXT NOT NULL DEFAULT '',
+			last_seen_at TIMESTAMP,
+			access_token_ciphertext TEXT NOT NULL,
+			access_token_nonce TEXT NOT NULL,
+			access_token_key_id TEXT NOT NULL,
+			access_token_sha256 TEXT NOT NULL,
+			access_url TEXT NOT NULL,
+			created_at TIMESTAMP NOT NULL,
+			expires_at TIMESTAMP NOT NULL,
+			updated_at TIMESTAMP NOT NULL,
+			deleted_at TIMESTAMP
+		)
+	`)
+	if err != nil {
+		return fmt.Errorf("failed to create sandboxes table: %w", err)
+	}
+
+	sandboxIndexes := []string{
+		"CREATE INDEX IF NOT EXISTS idx_sandboxes_lifecycle_status ON sandboxes(lifecycle_status)",
+		"CREATE INDEX IF NOT EXISTS idx_sandboxes_desired_state ON sandboxes(desired_state)",
+		"CREATE INDEX IF NOT EXISTS idx_sandboxes_expires_at ON sandboxes(expires_at)",
+		"CREATE INDEX IF NOT EXISTS idx_sandboxes_last_seen_at ON sandboxes(last_seen_at)",
+		"CREATE INDEX IF NOT EXISTS idx_sandboxes_template_name ON sandboxes(template_name)",
+		"CREATE INDEX IF NOT EXISTS idx_sandboxes_access_token_sha256 ON sandboxes(access_token_sha256)",
+	}
+	for _, idx := range sandboxIndexes {
+		if _, err := DB.Exec(idx); err != nil {
+			return fmt.Errorf("failed to create sandbox index: %w", err)
+		}
+	}
+
+	_, err = DB.Exec(`
+		CREATE TABLE IF NOT EXISTS sandbox_status_history (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			sandbox_id TEXT NOT NULL,
+			source TEXT NOT NULL,
+			from_status TEXT NOT NULL,
+			to_status TEXT NOT NULL,
+			reason TEXT NOT NULL DEFAULT '',
+			payload_json TEXT NOT NULL DEFAULT '{}',
+			created_at TIMESTAMP NOT NULL,
+			FOREIGN KEY (sandbox_id) REFERENCES sandboxes(id) ON DELETE CASCADE
+		)
+	`)
+	if err != nil {
+		return fmt.Errorf("failed to create sandbox_status_history table: %w", err)
+	}
+	if _, err := DB.Exec("CREATE INDEX IF NOT EXISTS idx_sandbox_status_history_sid_ct ON sandbox_status_history(sandbox_id, created_at DESC)"); err != nil {
+		return fmt.Errorf("failed to create sandbox status history index: %w", err)
+	}
+
+	_, err = DB.Exec(`
+		CREATE TABLE IF NOT EXISTS sandbox_reconcile_runs (
+			id TEXT PRIMARY KEY,
+			trigger_type TEXT NOT NULL,
+			started_at TIMESTAMP NOT NULL,
+			finished_at TIMESTAMP,
+			total_db INTEGER NOT NULL DEFAULT 0,
+			total_k8s INTEGER NOT NULL DEFAULT 0,
+			drift_count INTEGER NOT NULL DEFAULT 0,
+			fixed_count INTEGER NOT NULL DEFAULT 0,
+			status TEXT NOT NULL,
+			error TEXT NOT NULL DEFAULT ''
+		)
+	`)
+	if err != nil {
+		return fmt.Errorf("failed to create sandbox_reconcile_runs table: %w", err)
+	}
+
+	_, err = DB.Exec(`
+		CREATE TABLE IF NOT EXISTS sandbox_reconcile_items (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			run_id TEXT NOT NULL,
+			sandbox_id TEXT NOT NULL,
+			drift_type TEXT NOT NULL,
+			action TEXT NOT NULL,
+			detail TEXT NOT NULL DEFAULT '',
+			created_at TIMESTAMP NOT NULL,
+			FOREIGN KEY (run_id) REFERENCES sandbox_reconcile_runs(id) ON DELETE CASCADE
+		)
+	`)
+	if err != nil {
+		return fmt.Errorf("failed to create sandbox_reconcile_items table: %w", err)
+	}
+	if _, err := DB.Exec("CREATE INDEX IF NOT EXISTS idx_sandbox_reconcile_items_run_id ON sandbox_reconcile_items(run_id)"); err != nil {
+		return fmt.Errorf("failed to create sandbox reconcile items index: %w", err)
+	}
+
 	return nil
 }

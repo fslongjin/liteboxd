@@ -13,12 +13,13 @@ import (
 )
 
 type SandboxHandler struct {
-	svc        *service.SandboxService
-	drainState *lifecycle.DrainManager
+	svc          *service.SandboxService
+	reconcileSvc *service.SandboxReconcileService
+	drainState   *lifecycle.DrainManager
 }
 
-func NewSandboxHandler(svc *service.SandboxService, drainState *lifecycle.DrainManager) *SandboxHandler {
-	return &SandboxHandler{svc: svc, drainState: drainState}
+func NewSandboxHandler(svc *service.SandboxService, reconcileSvc *service.SandboxReconcileService, drainState *lifecycle.DrainManager) *SandboxHandler {
+	return &SandboxHandler{svc: svc, reconcileSvc: reconcileSvc, drainState: drainState}
 }
 
 func (h *SandboxHandler) RegisterRoutes(r *gin.RouterGroup) {
@@ -26,6 +27,9 @@ func (h *SandboxHandler) RegisterRoutes(r *gin.RouterGroup) {
 	{
 		sandboxes.POST("", h.Create)
 		sandboxes.GET("", h.List)
+		sandboxes.POST("/reconcile", h.TriggerReconcile)
+		sandboxes.GET("/reconcile/runs", h.ListReconcileRuns)
+		sandboxes.GET("/reconcile/runs/:id", h.GetReconcileRun)
 		sandboxes.GET("/:id", h.Get)
 		sandboxes.DELETE("/:id", h.Delete)
 		sandboxes.POST("/:id/exec", h.Exec)
@@ -84,6 +88,45 @@ func (h *SandboxHandler) Delete(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusNoContent, nil)
+}
+
+func (h *SandboxHandler) TriggerReconcile(c *gin.Context) {
+	resp, err := h.reconcileSvc.Run(c.Request.Context(), "manual")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusAccepted, resp)
+}
+
+func (h *SandboxHandler) ListReconcileRuns(c *gin.Context) {
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	resp, err := h.reconcileSvc.ListRuns(c.Request.Context(), limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
+func (h *SandboxHandler) GetReconcileRun(c *gin.Context) {
+	id := c.Param("id")
+	resp, err := h.reconcileSvc.GetRun(c.Request.Context(), id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if resp == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "reconcile run not found"})
+		return
+	}
+	c.JSON(http.StatusOK, resp)
 }
 
 func (h *SandboxHandler) Exec(c *gin.Context) {

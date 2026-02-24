@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/fslongjin/liteboxd/backend/internal/logx"
+	"github.com/fslongjin/liteboxd/backend/internal/security"
 	"github.com/gin-gonic/gin"
 )
 
@@ -39,18 +40,25 @@ func (s *Service) AuthMiddleware() gin.HandlerFunc {
 			return
 		}
 
-		// Verify token against pod annotation
-		storedToken, err := s.k8sClient.GetPodAccessToken(c.Request.Context(), sandboxID)
+		// Verify token against sandbox metadata in DB (source of truth).
+		record, err := s.sandboxStore.GetByID(c.Request.Context(), sandboxID)
 		if err != nil {
-			logger.Warn("sandbox not found during auth", "sandbox_id", sandboxID, "error", err)
+			logger.Error("failed to query sandbox metadata during auth", "sandbox_id", sandboxID, "error", err)
+			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
+				"error": "failed to verify access token",
+			})
+			return
+		}
+		if record == nil || record.DesiredState != "active" || record.LifecycleStatus == "deleted" || record.LifecycleStatus == "lost" {
+			logger.Warn("sandbox not found during auth", "sandbox_id", sandboxID)
 			c.AbortWithStatusJSON(http.StatusNotFound, gin.H{
 				"error": "sandbox not found",
 			})
 			return
 		}
 
-		// Compare tokens
-		if token != storedToken {
+		// Compare hashed token.
+		if security.HashToken(token) != record.AccessTokenSHA256 {
 			logger.Warn("invalid access token", "sandbox_id", sandboxID)
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
 				"error": "invalid access token",

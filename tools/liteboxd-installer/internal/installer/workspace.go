@@ -61,6 +61,8 @@ func (i *Installer) systemOverlayKustomization() string {
 	if strings.TrimSpace(i.cfg.LiteBoxd.GatewayURL) != "" {
 		gatewayURL = strings.TrimSpace(i.cfg.LiteBoxd.GatewayURL)
 	}
+	tokenKey := strings.TrimSpace(i.cfg.LiteBoxd.Security.SandboxTokenEncryptionKey)
+	tokenKeyID := strings.TrimSpace(i.cfg.LiteBoxd.Security.SandboxTokenEncryptionKeyID)
 
 	var b strings.Builder
 	b.WriteString("apiVersion: kustomize.config.k8s.io/v1beta1\n")
@@ -72,6 +74,12 @@ func (i *Installer) systemOverlayKustomization() string {
 	b.WriteString("  - target:\n      kind: Namespace\n      name: liteboxd-system\n    patch: |-\n      - op: replace\n        path: /metadata/name\n        value: " + sysNS + "\n")
 	b.WriteString("  - target:\n      kind: ClusterRoleBinding\n      name: liteboxd-api-cluster\n    patch: |-\n      - op: replace\n        path: /subjects/0/namespace\n        value: " + sysNS + "\n")
 	b.WriteString("  - target:\n      kind: ConfigMap\n      name: liteboxd-config\n    patch: |-\n      - op: replace\n        path: /data/SANDBOX_NAMESPACE\n        value: " + sandboxNS + "\n      - op: replace\n        path: /data/CONTROL_NAMESPACE\n        value: " + sysNS + "\n      - op: replace\n        path: /data/GATEWAY_URL\n        value: " + gatewayURL + "\n")
+	if tokenKey != "" {
+		b.WriteString("      - op: replace\n        path: /data/SANDBOX_TOKEN_ENCRYPTION_KEY\n        value: " + tokenKey + "\n")
+	}
+	if tokenKeyID != "" {
+		b.WriteString("      - op: replace\n        path: /data/SANDBOX_TOKEN_ENCRYPTION_KEY_ID\n        value: " + tokenKeyID + "\n")
+	}
 	b.WriteString("  - target:\n      kind: Ingress\n      name: liteboxd\n    patch: |-\n      - op: replace\n        path: /spec/rules/0/host\n        value: " + i.cfg.LiteBoxd.IngressHost + "\n")
 	b.WriteString("  - target:\n      kind: Deployment\n      name: liteboxd-api\n    patch: |-\n      - op: replace\n        path: /spec/template/spec/containers/0/image\n        value: " + i.cfg.LiteBoxd.Images.API + "\n")
 	b.WriteString("  - target:\n      kind: Deployment\n      name: liteboxd-gateway\n    patch: |-\n      - op: replace\n        path: /spec/template/spec/containers/0/image\n        value: " + i.cfg.LiteBoxd.Images.Gateway + "\n")
