@@ -28,6 +28,14 @@ A lightweight K8s sandbox system inspired by e2b, designed to run on k3s.
 
 ## Quick Start
 
+### Deploy LiteBoxd with Installer (Recommended)
+
+For production-style deployment (install K3s + Cilium + LiteBoxd), use `liteboxd-installer`:
+
+- [Deployment Guide](docs/user/deploy.md)
+
+### Local Development
+
 ### Prerequisites
 
 ```bash

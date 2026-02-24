@@ -1,0 +1,48 @@
+cluster:
+  name: "liteboxd-cluster-only"
+  k3sInstall:
+    scriptURL: "https://rancher-mirror.rancher.cn/k3s/k3s-install.sh"
+    mirror: "cn"
+  registries:
+    mirrors:
+      "docker.io":
+        endpoint:
+          - "https://mirror.ccs.tencentyun.com"
+  master:
+    host: "10.10.10.11"
+    nodeIP: "172.16.0.11"
+    port: 22
+    user: "root"
+    password: "${MASTER_PASS}"
+    sudo: false
+    k3s:
+      version: "v1.34.4+k3s1"
+      tlsSAN:
+        - "10.10.10.11"
+      installArgs:
+        - "--flannel-backend=none"
+        - "--disable-network-policy"
+  agents:
+    - host: "10.10.10.12"
+      nodeIP: "172.16.0.12"
+      port: 22
+      user: "root"
+      password: "${AGENT1_PASS}"
+      sudo: false
+
+network:
+  cni: "cilium"
+  cilium:
+    version: "1.18.6"
+    cliVersion: "v0.19.1"
+    cliDownloadBaseURL: "https://cnb.cool/DragonOS-Community/cilium-cli/-/releases/download"
+    podCIDR: "10.42.0.0/16"
+    kubeProxyReplacement: true
+    enableEgressGateway: true
+
+runtime:
+  parallelism: 5
+  sshTimeoutSeconds: 15
+  commandTimeoutSeconds: 1200
+  removeAbsentAgents: false
+  dryRun: false
