@@ -3,7 +3,7 @@ kind: Deployment
 metadata:
   name: liteboxd-gateway
 spec:
-  replicas: 1
+  replicas: 2
   selector:
     matchLabels:
       app: liteboxd-gateway
