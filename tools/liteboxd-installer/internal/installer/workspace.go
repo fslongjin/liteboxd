@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -61,6 +62,7 @@ func (i *Installer) systemOverlayKustomization() string {
 	if strings.TrimSpace(i.cfg.LiteBoxd.GatewayURL) != "" {
 		gatewayURL = strings.TrimSpace(i.cfg.LiteBoxd.GatewayURL)
 	}
+	retentionDays := i.cfg.LiteBoxd.MetadataRetentionDays
 	tokenKey := strings.TrimSpace(i.cfg.LiteBoxd.Security.SandboxTokenEncryptionKey)
 	tokenKeyID := strings.TrimSpace(i.cfg.LiteBoxd.Security.SandboxTokenEncryptionKeyID)
 
@@ -73,7 +75,7 @@ func (i *Installer) systemOverlayKustomization() string {
 	b.WriteString("patches:\n")
 	b.WriteString("  - target:\n      kind: Namespace\n      name: liteboxd-system\n    patch: |-\n      - op: replace\n        path: /metadata/name\n        value: " + sysNS + "\n")
 	b.WriteString("  - target:\n      kind: ClusterRoleBinding\n      name: liteboxd-api-cluster\n    patch: |-\n      - op: replace\n        path: /subjects/0/namespace\n        value: " + sysNS + "\n")
-	b.WriteString("  - target:\n      kind: ConfigMap\n      name: liteboxd-config\n    patch: |-\n      - op: replace\n        path: /data/SANDBOX_NAMESPACE\n        value: " + sandboxNS + "\n      - op: replace\n        path: /data/CONTROL_NAMESPACE\n        value: " + sysNS + "\n      - op: replace\n        path: /data/GATEWAY_URL\n        value: " + gatewayURL + "\n")
+	b.WriteString("  - target:\n      kind: ConfigMap\n      name: liteboxd-config\n    patch: |-\n      - op: replace\n        path: /data/SANDBOX_NAMESPACE\n        value: " + sandboxNS + "\n      - op: replace\n        path: /data/CONTROL_NAMESPACE\n        value: " + sysNS + "\n      - op: replace\n        path: /data/GATEWAY_URL\n        value: " + gatewayURL + "\n      - op: replace\n        path: /data/SANDBOX_METADATA_RETENTION_DAYS\n        value: \"" + strconv.Itoa(retentionDays) + "\"\n")
 	if tokenKey != "" {
 		b.WriteString("      - op: replace\n        path: /data/SANDBOX_TOKEN_ENCRYPTION_KEY\n        value: " + tokenKey + "\n")
 	}

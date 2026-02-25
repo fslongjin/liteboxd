@@ -34,6 +34,21 @@ const router = createRouter({
       name: 'template-detail',
       component: () => import('../views/TemplateDetail.vue'),
     },
+    {
+      path: '/metadata/sandboxes',
+      name: 'metadata-sandboxes',
+      component: () => import('../views/MetadataSandboxList.vue'),
+    },
+    {
+      path: '/metadata/sandboxes/:id',
+      name: 'metadata-sandbox-detail',
+      component: () => import('../views/MetadataSandboxDetail.vue'),
+    },
+    {
+      path: '/metadata/reconcile',
+      name: 'metadata-reconcile',
+      component: () => import('../views/MetadataReconcile.vue'),
+    },
   ],
 })
 

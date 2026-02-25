@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -82,6 +83,30 @@ type ReconcileItemRecord struct {
 	CreatedAt time.Time
 }
 
+type SandboxMetadataQuery struct {
+	ID              string
+	Template        string
+	DesiredState    string
+	LifecycleStatus string
+	CreatedFrom     *time.Time
+	CreatedTo       *time.Time
+	DeletedFrom     *time.Time
+	DeletedTo       *time.Time
+	Page            int
+	PageSize        int
+}
+
+type SandboxStatusHistoryRecord struct {
+	ID         int64
+	SandboxID  string
+	Source     string
+	FromStatus string
+	ToStatus   string
+	Reason     string
+	PayloadRaw string
+	CreatedAt  time.Time
+}
+
 // SandboxStore handles sandbox metadata persistence.
 type SandboxStore struct {
 	db *sql.DB
@@ -145,6 +170,79 @@ func (s *SandboxStore) ListForReconcile(ctx context.Context) ([]SandboxRecord, e
 	}
 	defer rows.Close()
 	return scanSandboxRows(rows)
+}
+
+func (s *SandboxStore) ListMetadata(ctx context.Context, query SandboxMetadataQuery) ([]SandboxRecord, int, error) {
+	if query.Page <= 0 {
+		query.Page = 1
+	}
+	if query.PageSize <= 0 {
+		query.PageSize = 20
+	}
+	if query.PageSize > 100 {
+		query.PageSize = 100
+	}
+
+	var where []string
+	var args []any
+	if query.ID != "" {
+		where = append(where, "id LIKE ?")
+		args = append(args, query.ID+"%")
+	}
+	if query.Template != "" {
+		where = append(where, "template_name = ?")
+		args = append(args, query.Template)
+	}
+	if query.DesiredState != "" {
+		where = append(where, "desired_state = ?")
+		args = append(args, query.DesiredState)
+	}
+	if query.LifecycleStatus != "" {
+		where = append(where, "lifecycle_status = ?")
+		args = append(args, query.LifecycleStatus)
+	}
+	if query.CreatedFrom != nil {
+		where = append(where, "created_at >= ?")
+		args = append(args, *query.CreatedFrom)
+	}
+	if query.CreatedTo != nil {
+		where = append(where, "created_at <= ?")
+		args = append(args, *query.CreatedTo)
+	}
+	if query.DeletedFrom != nil {
+		where = append(where, "deleted_at IS NOT NULL", "deleted_at >= ?")
+		args = append(args, *query.DeletedFrom)
+	}
+	if query.DeletedTo != nil {
+		where = append(where, "deleted_at IS NOT NULL", "deleted_at <= ?")
+		args = append(args, *query.DeletedTo)
+	}
+
+	whereSQL := ""
+	if len(where) > 0 {
+		whereSQL = " WHERE " + strings.Join(where, " AND ")
+	}
+
+	var total int
+	countSQL := "SELECT COUNT(1) FROM sandboxes" + whereSQL
+	if err := s.db.QueryRowContext(ctx, countSQL, args...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("failed to count metadata sandboxes: %w", err)
+	}
+
+	offset := (query.Page - 1) * query.PageSize
+	listSQL := sandboxSelectSQL + whereSQL + " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+	listArgs := append(append([]any{}, args...), query.PageSize, offset)
+	rows, err := s.db.QueryContext(ctx, listSQL, listArgs...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to list metadata sandboxes: %w", err)
+	}
+	defer rows.Close()
+
+	items, err := scanSandboxRows(rows)
+	if err != nil {
+		return nil, 0, err
+	}
+	return items, total, nil
 }
 
 func (s *SandboxStore) ListExpiredActive(ctx context.Context, now time.Time) ([]SandboxRecord, error) {
@@ -343,6 +441,113 @@ func (s *SandboxStore) ListReconcileItems(ctx context.Context, runID string) ([]
 		items = []ReconcileItemRecord{}
 	}
 	return items, nil
+}
+
+func (s *SandboxStore) ListStatusHistory(ctx context.Context, sandboxID string, limit int, beforeID int64) ([]SandboxStatusHistoryRecord, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 200 {
+		limit = 200
+	}
+
+	baseSQL := `
+		SELECT id, sandbox_id, source, from_status, to_status, reason, payload_json, created_at
+		FROM sandbox_status_history
+		WHERE sandbox_id = ?`
+	args := []any{sandboxID}
+	if beforeID > 0 {
+		baseSQL += " AND id < ?"
+		args = append(args, beforeID)
+	}
+	baseSQL += " ORDER BY id DESC LIMIT ?"
+	args = append(args, limit)
+
+	rows, err := s.db.QueryContext(ctx, baseSQL, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list sandbox status history: %w", err)
+	}
+	defer rows.Close()
+
+	var items []SandboxStatusHistoryRecord
+	for rows.Next() {
+		var item SandboxStatusHistoryRecord
+		if err := rows.Scan(&item.ID, &item.SandboxID, &item.Source, &item.FromStatus, &item.ToStatus, &item.Reason, &item.PayloadRaw, &item.CreatedAt); err != nil {
+			return nil, fmt.Errorf("failed to scan sandbox status history: %w", err)
+		}
+		items = append(items, item)
+	}
+	if items == nil {
+		items = []SandboxStatusHistoryRecord{}
+	}
+	return items, nil
+}
+
+// PurgeHistoryResult contains deletion stats from history cleanup.
+type PurgeHistoryResult struct {
+	DeletedSandboxes      int64
+	DeletedStatusHistory  int64
+	DeletedReconcileRuns  int64
+	DeletedReconcileItems int64
+}
+
+// PurgeHistoricalData deletes historical records older than cutoff.
+// Retention uses one cutoff for all lifecycle-related tables.
+func (s *SandboxStore) PurgeHistoricalData(ctx context.Context, cutoff time.Time) (*PurgeHistoryResult, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin purge transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	result := &PurgeHistoryResult{}
+
+	// 1) Purge reconcile items first (also cascaded by reconcile runs, but explicit delete keeps stats clear).
+	res, err := tx.ExecContext(ctx, `
+		DELETE FROM sandbox_reconcile_items
+		WHERE created_at < ?
+	`, cutoff)
+	if err != nil {
+		return nil, fmt.Errorf("failed to purge reconcile items: %w", err)
+	}
+	result.DeletedReconcileItems, _ = res.RowsAffected()
+
+	// 2) Purge reconcile runs.
+	res, err = tx.ExecContext(ctx, `
+		DELETE FROM sandbox_reconcile_runs
+		WHERE started_at < ?
+	`, cutoff)
+	if err != nil {
+		return nil, fmt.Errorf("failed to purge reconcile runs: %w", err)
+	}
+	result.DeletedReconcileRuns, _ = res.RowsAffected()
+
+	// 3) Purge status history.
+	res, err = tx.ExecContext(ctx, `
+		DELETE FROM sandbox_status_history
+		WHERE created_at < ?
+	`, cutoff)
+	if err != nil {
+		return nil, fmt.Errorf("failed to purge status history: %w", err)
+	}
+	result.DeletedStatusHistory, _ = res.RowsAffected()
+
+	// 4) Purge deleted sandboxes only.
+	res, err = tx.ExecContext(ctx, `
+		DELETE FROM sandboxes
+		WHERE lifecycle_status = 'deleted'
+		  AND deleted_at IS NOT NULL
+		  AND deleted_at < ?
+	`, cutoff)
+	if err != nil {
+		return nil, fmt.Errorf("failed to purge deleted sandboxes: %w", err)
+	}
+	result.DeletedSandboxes, _ = res.RowsAffected()
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("failed to commit purge transaction: %w", err)
+	}
+	return result, nil
 }
 
 const sandboxSelectSQL = `

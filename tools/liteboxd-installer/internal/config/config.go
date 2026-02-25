@@ -77,6 +77,7 @@ type LiteBoxdConfig struct {
 	NamespaceSandbox       string         `yaml:"namespaceSandbox"`
 	IngressHost            string         `yaml:"ingressHost"`
 	GatewayURL             string         `yaml:"gatewayURL"`
+	MetadataRetentionDays  int            `yaml:"metadataRetentionDays"`
 	Security               SecurityConfig `yaml:"security"`
 	ConfigDir              string         `yaml:"configDir"`
 	Images                 ImageConfig    `yaml:"images"`
@@ -198,6 +199,9 @@ func (c *Config) setDefaults(configPath string) {
 	if c.LiteBoxd.DeploySandboxResources == nil {
 		v := true
 		c.LiteBoxd.DeploySandboxResources = &v
+	}
+	if c.LiteBoxd.MetadataRetentionDays <= 0 {
+		c.LiteBoxd.MetadataRetentionDays = 7
 	}
 	if c.LiteBoxd.Security.SandboxTokenEncryptionKeyID == "" {
 		c.LiteBoxd.Security.SandboxTokenEncryptionKeyID = "v1"

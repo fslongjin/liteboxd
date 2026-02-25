@@ -25,6 +25,14 @@
         >
           模板管理
         </t-link>
+        <t-link
+          :class="['nav-link', { active: route.path.startsWith('/metadata') }]"
+          theme="light"
+          hover="color"
+          @click="navigateTo('/metadata/sandboxes')"
+        >
+          元数据记录
+        </t-link>
       </div>
     </t-header>
     <t-content class="app-content">

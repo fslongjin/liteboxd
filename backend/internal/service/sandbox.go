@@ -337,6 +337,69 @@ func (s *SandboxService) List(ctx context.Context) (*model.SandboxListResponse, 
 	return &model.SandboxListResponse{Items: items}, nil
 }
 
+func (s *SandboxService) ListMetadata(ctx context.Context, opts model.SandboxMetadataListOptions) (*model.SandboxMetadataListResponse, error) {
+	query := store.SandboxMetadataQuery{
+		ID:              opts.ID,
+		Template:        opts.Template,
+		DesiredState:    opts.DesiredState,
+		LifecycleStatus: opts.LifecycleStatus,
+		CreatedFrom:     opts.CreatedFrom,
+		CreatedTo:       opts.CreatedTo,
+		DeletedFrom:     opts.DeletedFrom,
+		DeletedTo:       opts.DeletedTo,
+		Page:            opts.Page,
+		PageSize:        opts.PageSize,
+	}
+	records, total, err := s.sandboxStore.ListMetadata(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+
+	page := opts.Page
+	if page <= 0 {
+		page = 1
+	}
+	pageSize := opts.PageSize
+	if pageSize <= 0 {
+		pageSize = 20
+	}
+	if pageSize > 100 {
+		pageSize = 100
+	}
+
+	items := make([]model.Sandbox, 0, len(records))
+	for i := range records {
+		items = append(items, s.recordToSandboxMetadata(&records[i]))
+	}
+	return &model.SandboxMetadataListResponse{
+		Items:    items,
+		Total:    total,
+		Page:     page,
+		PageSize: pageSize,
+	}, nil
+}
+
+func (s *SandboxService) GetStatusHistory(ctx context.Context, id string, limit int, beforeID int64) (*model.SandboxStatusHistoryResponse, error) {
+	history, err := s.sandboxStore.ListStatusHistory(ctx, id, limit, beforeID)
+	if err != nil {
+		return nil, err
+	}
+	items := make([]model.SandboxStatusHistoryItem, 0, len(history))
+	for i := range history {
+		items = append(items, model.SandboxStatusHistoryItem{
+			ID:         history[i].ID,
+			SandboxID:  history[i].SandboxID,
+			Source:     history[i].Source,
+			FromStatus: history[i].FromStatus,
+			ToStatus:   history[i].ToStatus,
+			Reason:     history[i].Reason,
+			PayloadRaw: history[i].PayloadRaw,
+			CreatedAt:  history[i].CreatedAt,
+		})
+	}
+	return &model.SandboxStatusHistoryResponse{Items: items}, nil
+}
+
 func (s *SandboxService) Delete(ctx context.Context, id string) error {
 	record, err := s.sandboxStore.GetByID(ctx, id)
 	if err != nil {
@@ -519,6 +582,39 @@ func (s *SandboxService) StartTTLCleaner(interval time.Duration) {
 	}()
 }
 
+func (s *SandboxService) StartMetadataCleaner(interval time.Duration, retention time.Duration) {
+	ticker := time.NewTicker(interval)
+	go func() {
+		for range ticker.C {
+			s.cleanHistoricalData(retention)
+		}
+	}()
+}
+
+func (s *SandboxService) cleanHistoricalData(retention time.Duration) {
+	ctx := context.Background()
+	logger := slog.Default().With("component", "sandbox_metadata_cleaner")
+	if retention <= 0 {
+		return
+	}
+	cutoff := time.Now().UTC().Add(-retention)
+	res, err := s.sandboxStore.PurgeHistoricalData(ctx, cutoff)
+	if err != nil {
+		logger.Error("failed to purge sandbox metadata", "error", err, "cutoff", cutoff.Format(time.RFC3339))
+		return
+	}
+	if res.DeletedSandboxes+res.DeletedStatusHistory+res.DeletedReconcileRuns+res.DeletedReconcileItems > 0 {
+		logger.Info(
+			"purged sandbox metadata",
+			"cutoff", cutoff.Format(time.RFC3339),
+			"deleted_sandboxes", res.DeletedSandboxes,
+			"deleted_status_history", res.DeletedStatusHistory,
+			"deleted_reconcile_runs", res.DeletedReconcileRuns,
+			"deleted_reconcile_items", res.DeletedReconcileItems,
+		)
+	}
+}
+
 func (s *SandboxService) cleanExpiredSandboxes() {
 	ctx := context.Background()
 	logger := slog.Default().With("component", "sandbox_ttl_cleaner")
@@ -554,7 +650,13 @@ func (s *SandboxService) recordToSandbox(record *store.SandboxRecord) (*model.Sa
 	if err != nil {
 		return nil, fmt.Errorf("failed to decrypt access token: %w", err)
 	}
-	return &model.Sandbox{
+	sandbox := s.recordToSandboxMetadata(record)
+	sandbox.AccessToken = accessToken
+	return &sandbox, nil
+}
+
+func (s *SandboxService) recordToSandboxMetadata(record *store.SandboxRecord) model.Sandbox {
+	return model.Sandbox{
 		ID:              record.ID,
 		Image:           record.Image,
 		CPU:             record.CPU,
@@ -564,11 +666,18 @@ func (s *SandboxService) recordToSandbox(record *store.SandboxRecord) (*model.Sa
 		Status:          parseLifecycleStatus(record.LifecycleStatus),
 		Template:        record.TemplateName,
 		TemplateVersion: record.TemplateVersion,
+		DesiredState:    record.DesiredState,
+		LifecycleStatus: record.LifecycleStatus,
+		StatusReason:    record.StatusReason,
+		PodPhase:        record.PodPhase,
+		PodIP:           record.PodIP,
+		LastSeenAt:      record.LastSeenAt,
 		CreatedAt:       record.CreatedAt,
 		ExpiresAt:       record.ExpiresAt,
-		AccessToken:     accessToken,
+		UpdatedAt:       record.UpdatedAt,
+		DeletedAt:       record.DeletedAt,
 		AccessURL:       record.AccessURL,
-	}, nil
+	}
 }
 
 func parseLifecycleStatus(v string) model.SandboxStatus {

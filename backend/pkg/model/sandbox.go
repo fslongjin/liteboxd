@@ -23,8 +23,16 @@ type Sandbox struct {
 	Status          SandboxStatus     `json:"status"`
 	Template        string            `json:"template,omitempty"`
 	TemplateVersion int               `json:"templateVersion,omitempty"`
+	DesiredState    string            `json:"desired_state,omitempty"`
+	LifecycleStatus string            `json:"lifecycle_status,omitempty"`
+	StatusReason    string            `json:"status_reason,omitempty"`
+	PodPhase        string            `json:"pod_phase,omitempty"`
+	PodIP           string            `json:"pod_ip,omitempty"`
+	LastSeenAt      *time.Time        `json:"last_seen_at,omitempty"`
 	CreatedAt       time.Time         `json:"created_at"`
 	ExpiresAt       time.Time         `json:"expires_at"`
+	UpdatedAt       time.Time         `json:"updated_at"`
+	DeletedAt       *time.Time        `json:"deleted_at,omitempty"`
 
 	// Network access fields
 	AccessToken string `json:"accessToken,omitempty"` // Access token for inbound requests

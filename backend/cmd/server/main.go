@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -101,6 +102,17 @@ func main() {
 
 	sandboxSvc.StartTTLCleaner(30 * time.Second)
 	slog.Info("ttl cleaner started", "component", "sandbox_service", "interval", "30s")
+
+	retentionDays := 7
+	if v := os.Getenv("SANDBOX_METADATA_RETENTION_DAYS"); v != "" {
+		if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 {
+			retentionDays = parsed
+		} else {
+			slog.Warn("invalid SANDBOX_METADATA_RETENTION_DAYS, fallback to default", "value", v, "default_days", retentionDays)
+		}
+	}
+	sandboxSvc.StartMetadataCleaner(1*time.Hour, time.Duration(retentionDays)*24*time.Hour)
+	slog.Info("metadata cleaner started", "component", "sandbox_service", "interval", "1h", "retention_days", retentionDays)
 
 	prepullSvc.StartStatusUpdater(10 * time.Second)
 	slog.Info("prepull status updater started", "component", "prepull_service", "interval", "10s")
