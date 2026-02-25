@@ -87,6 +87,214 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
+  /sandboxes/reconcile:
+    post:
+      tags:
+        - sandboxes
+      summary: Trigger sandbox reconcile
+      description: Triggers one reconcile run to compare sandbox metadata in DB with Kubernetes runtime state.
+      operationId: triggerSandboxReconcile
+      responses:
+        '202':
+          description: Reconcile started
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReconcileRunDetailResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /sandboxes/metadata:
+    get:
+      tags:
+        - sandboxes
+      summary: List sandbox metadata records
+      description: Returns sandbox metadata records (including deleted) with filters and pagination.
+      operationId: listSandboxMetadata
+      parameters:
+        - name: id
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: template
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: desired_state
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [active, deleted]
+        - name: lifecycle_status
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: created_from
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - name: created_to
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - name: deleted_from
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - name: deleted_to
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - name: page
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: page_size
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        '200':
+          description: Sandbox metadata list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SandboxMetadataListResponse'
+        '400':
+          description: Invalid query parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /sandboxes/reconcile/runs:
+    get:
+      tags:
+        - sandboxes
+      summary: List reconcile runs
+      description: Returns recent reconcile run summaries.
+      operationId: listSandboxReconcileRuns
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        '200':
+          description: Reconcile run list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReconcileRunListResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /sandboxes/reconcile/runs/{id}:
+    get:
+      tags:
+        - sandboxes
+      summary: Get reconcile run detail
+      description: Returns one reconcile run with its drift items.
+      operationId: getSandboxReconcileRun
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Reconcile run detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReconcileRunDetailResponse'
+        '404':
+          description: Reconcile run not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /sandboxes/{id}/status-history:
+    get:
+      tags:
+        - sandboxes
+      summary: Get sandbox status history
+      description: Returns status transition history for one sandbox.
+      operationId: getSandboxStatusHistory
+      parameters:
+        - $ref: '#/components/parameters/SandboxId'
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+        - name: before_id
+          in: query
+          required: false
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Sandbox status history
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SandboxStatusHistoryResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
   /sandboxes/{id}:
     get:
       tags:
@@ -787,6 +995,28 @@ components:
           type: integer
           description: Template version if created from template
           example: 1
+        desired_state:
+          type: string
+          description: Desired state in metadata store
+          example: "active"
+        lifecycle_status:
+          type: string
+          description: Lifecycle status in metadata store
+          example: "running"
+        status_reason:
+          type: string
+          description: Reason for current lifecycle status
+        pod_phase:
+          type: string
+          description: Observed pod phase in Kubernetes
+          example: "Running"
+        pod_ip:
+          type: string
+          description: Observed pod IP in Kubernetes
+        last_seen_at:
+          type: string
+          format: date-time
+          description: Last time pod observation was updated
         created_at:
           type: string
           format: date-time
@@ -797,6 +1027,22 @@ components:
           format: date-time
           description: Expiration timestamp in RFC3339 format
           example: "2024-01-23T16:30:00Z"
+        updated_at:
+          type: string
+          format: date-time
+          description: Last metadata update timestamp in RFC3339 format
+        deleted_at:
+          type: string
+          format: date-time
+          description: Deletion timestamp in RFC3339 format when deleted
+        accessToken:
+          type: string
+          description: Access token for gateway sandbox access
+          example: "2fb2f5d0f5e0..."
+        accessUrl:
+          type: string
+          description: Base gateway URL for sandbox access
+          example: "http://localhost:8081/api/v1/sandbox/a1b2c3d4"
 
     SandboxStatus:
       type: string
@@ -805,6 +1051,7 @@ components:
         - running
         - succeeded
         - failed
+        - terminating
         - unknown
       description: Current status of the sandbox
       example: "running"
@@ -856,6 +1103,139 @@ components:
           items:
             $ref: '#/components/schemas/Sandbox'
           description: List of sandboxes
+
+    SandboxMetadataListResponse:
+      type: object
+      required:
+        - items
+        - total
+        - page
+        - page_size
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Sandbox'
+        total:
+          type: integer
+        page:
+          type: integer
+        page_size:
+          type: integer
+
+    SandboxStatusHistoryItem:
+      type: object
+      required:
+        - id
+        - sandbox_id
+        - source
+        - from_status
+        - to_status
+        - reason
+        - payload_json
+        - created_at
+      properties:
+        id:
+          type: integer
+        sandbox_id:
+          type: string
+        source:
+          type: string
+          description: Event source, e.g. api|watcher|reconciler|ttl_cleaner|system
+        from_status:
+          type: string
+        to_status:
+          type: string
+        reason:
+          type: string
+        payload_json:
+          type: string
+          description: Raw JSON payload string
+        created_at:
+          type: string
+          format: date-time
+
+    SandboxStatusHistoryResponse:
+      type: object
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/SandboxStatusHistoryItem'
+
+    ReconcileRun:
+      type: object
+      properties:
+        id:
+          type: string
+        trigger_type:
+          type: string
+          enum: [scheduled, manual, startup]
+        started_at:
+          type: string
+          format: date-time
+        finished_at:
+          type: string
+          format: date-time
+        total_db:
+          type: integer
+        total_k8s:
+          type: integer
+        drift_count:
+          type: integer
+        fixed_count:
+          type: integer
+        status:
+          type: string
+          enum: [running, completed, failed]
+        error:
+          type: string
+
+    ReconcileItem:
+      type: object
+      properties:
+        id:
+          type: integer
+        run_id:
+          type: string
+        sandbox_id:
+          type: string
+        drift_type:
+          type: string
+          enum: [missing_in_k8s, missing_in_db, status_mismatch, spec_mismatch]
+        action:
+          type: string
+          enum: [mark_lost, mark_deleted, alert_only, none]
+        detail:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    ReconcileRunListResponse:
+      type: object
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReconcileRun'
+
+    ReconcileRunDetailResponse:
+      type: object
+      required:
+        - run
+        - items
+      properties:
+        run:
+          $ref: '#/components/schemas/ReconcileRun'
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReconcileItem'
 
     ExecRequest:
       type: object

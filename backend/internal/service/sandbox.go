@@ -14,19 +14,26 @@ import (
 	"github.com/fslongjin/liteboxd/backend/internal/k8s"
 	"github.com/fslongjin/liteboxd/backend/internal/logx"
 	"github.com/fslongjin/liteboxd/backend/internal/model"
+	"github.com/fslongjin/liteboxd/backend/internal/security"
+	"github.com/fslongjin/liteboxd/backend/internal/store"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
 
 type SandboxService struct {
-	k8sClient   *k8s.Client
-	templateSvc *TemplateService
+	k8sClient    *k8s.Client
+	templateSvc  *TemplateService
+	sandboxStore *store.SandboxStore
+	tokenCipher  *security.TokenCipher
 }
 
-func NewSandboxService(k8sClient *k8s.Client) *SandboxService {
+func NewSandboxService(k8sClient *k8s.Client, sandboxStore *store.SandboxStore, tokenCipher *security.TokenCipher) *SandboxService {
 	return &SandboxService{
-		k8sClient: k8sClient,
+		k8sClient:    k8sClient,
+		sandboxStore: sandboxStore,
+		tokenCipher:  tokenCipher,
 	}
 }
 
@@ -112,6 +119,55 @@ func (s *SandboxService) Create(ctx context.Context, req *model.CreateSandboxReq
 		ttl = 3600
 	}
 
+	accessToken, err := security.GenerateToken(32)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate access token: %w", err)
+	}
+	ciphertext, nonce, keyID, err := s.tokenCipher.Encrypt(accessToken)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encrypt access token: %w", err)
+	}
+	tokenHash := security.HashToken(accessToken)
+
+	gatewayURL := os.Getenv("GATEWAY_URL")
+	if gatewayURL == "" {
+		gatewayURL = "http://localhost:8080" // Default for development
+	}
+	accessURL := fmt.Sprintf("%s/api/v1/sandbox/%s", gatewayURL, id)
+
+	now := time.Now().UTC()
+	envJSONBytes, err := json.Marshal(env)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal env: %w", err)
+	}
+	record := &store.SandboxRecord{
+		ID:                    id,
+		TemplateName:          req.Template,
+		TemplateVersion:       templateVersion,
+		Image:                 image,
+		CPU:                   cpu,
+		Memory:                memory,
+		TTL:                   ttl,
+		EnvJSON:               string(envJSONBytes),
+		DesiredState:          store.DesiredStateActive,
+		LifecycleStatus:       "creating",
+		StatusReason:          "",
+		ClusterNamespace:      s.k8sClient.SandboxNamespace(),
+		PodName:               fmt.Sprintf("sandbox-%s", id),
+		AccessTokenCiphertext: ciphertext,
+		AccessTokenNonce:      nonce,
+		AccessTokenKeyID:      keyID,
+		AccessTokenSHA256:     tokenHash,
+		AccessURL:             accessURL,
+		CreatedAt:             now,
+		ExpiresAt:             now.Add(time.Duration(ttl) * time.Second),
+		UpdatedAt:             now,
+	}
+	if err := s.sandboxStore.Create(ctx, record); err != nil {
+		return nil, err
+	}
+	_ = s.sandboxStore.AppendStatusHistory(ctx, id, "api", "", "creating", "create requested", nil, now)
+
 	// Convert model.FileSpec to k8s.FileSpec
 	var files []k8s.FileSpec
 	for _, f := range startupFiles {
@@ -157,42 +213,53 @@ func (s *SandboxService) Create(ctx context.Context, req *model.CreateSandboxReq
 		Memory:         memory,
 		TTL:            ttl,
 		Env:            env,
+		Annotations:    annotations,
 		StartupScript:  startupScript,
 		StartupFiles:   files,
 		ReadinessProbe: probe,
-		Annotations:    annotations,
 		Network:        k8sNetwork,
+		AccessToken:    accessToken,
 	}
 
 	pod, err := s.k8sClient.CreatePod(ctx, opts)
 	if err != nil {
+		_ = s.sandboxStore.UpdateStatus(ctx, id, string(model.SandboxStatusFailed), err.Error(), time.Now().UTC())
+		_ = s.sandboxStore.AppendStatusHistory(ctx, id, "api", "creating", string(model.SandboxStatusFailed), err.Error(), nil, time.Now().UTC())
 		return nil, fmt.Errorf("failed to create pod: %w", err)
 	}
+
+	lifecycleStatus := string(convertPodStatus(pod))
+	if err := s.sandboxStore.UpdateObservedState(
+		ctx,
+		id,
+		string(pod.UID),
+		string(pod.Status.Phase),
+		pod.Status.PodIP,
+		lifecycleStatus,
+		"",
+		time.Now().UTC(),
+		time.Now().UTC(),
+	); err != nil {
+		return nil, err
+	}
+	_ = s.sandboxStore.AppendStatusHistory(ctx, id, "api", "creating", lifecycleStatus, "pod created", nil, time.Now().UTC())
 
 	// Only apply domain allowlist policy if internet access is enabled
 	if networkConfig != nil && networkConfig.AllowInternetAccess && len(networkConfig.AllowedDomains) > 0 {
 		netPolicyMgr := k8s.NewNetworkPolicyManager(s.k8sClient)
 		if err := netPolicyMgr.ApplyDomainAllowlistPolicy(ctx, id, networkConfig.AllowedDomains); err != nil {
 			_ = s.k8sClient.DeletePod(ctx, id)
+			_ = s.sandboxStore.UpdateStatus(ctx, id, string(model.SandboxStatusFailed), err.Error(), time.Now().UTC())
 			return nil, fmt.Errorf("failed to apply domain allowlist policy: %w", err)
 		}
 	}
 
-	// Get access token from pod annotations
-	accessToken := pod.Annotations[k8s.AnnotationAccessToken]
-
-	// Generate access URL
-	gatewayURL := os.Getenv("GATEWAY_URL")
-	if gatewayURL == "" {
-		gatewayURL = "http://localhost:8080" // Default for development
+	sandbox, err := s.recordToSandbox(record)
+	if err != nil {
+		return nil, err
 	}
-	accessURL := fmt.Sprintf("%s/api/v1/sandbox/%s", gatewayURL, id)
-
-	sandbox := s.podToSandbox(pod)
-	sandbox.Template = req.Template
-	sandbox.TemplateVersion = templateVersion
+	// For create response, return original plaintext token to avoid extra decrypt operation.
 	sandbox.AccessToken = accessToken
-	sandbox.AccessURL = accessURL
 
 	// Run post-creation tasks asynchronously (wait for ready, upload files, exec startup script)
 	bgCtx := logx.WithRequestID(context.Background(), logx.RequestIDFromContext(ctx))
@@ -221,10 +288,15 @@ func (s *SandboxService) runPostCreationTasks(ctx context.Context, id string, pr
 	readyCtx, cancel := context.WithTimeout(ctx, time.Duration(startupTimeout)*time.Second)
 	defer cancel()
 	if err := s.k8sClient.WaitForReady(readyCtx, id, probe); err != nil {
-		// Pod created but not ready - log the error
+		// Pod created but not ready - log the error and update metadata state
 		logger.Warn("post-creation pod not ready", "error", err)
+		_ = s.sandboxStore.UpdateStatus(context.Background(), id, string(model.SandboxStatusFailed), "startup/readiness failed", time.Now().UTC())
+		_ = s.sandboxStore.AppendStatusHistory(context.Background(), id, "system", "pending", string(model.SandboxStatusFailed), "startup/readiness failed", nil, time.Now().UTC())
 		return
 	}
+
+	_ = s.sandboxStore.UpdateStatus(context.Background(), id, string(model.SandboxStatusRunning), "", time.Now().UTC())
+	_ = s.sandboxStore.AppendStatusHistory(context.Background(), id, "system", "pending", string(model.SandboxStatusRunning), "sandbox is ready", nil, time.Now().UTC())
 
 	// Upload files if specified
 	if len(files) > 0 {
@@ -237,44 +309,129 @@ func (s *SandboxService) runPostCreationTasks(ctx context.Context, id string, pr
 }
 
 func (s *SandboxService) Get(ctx context.Context, id string) (*model.Sandbox, error) {
-	pod, err := s.k8sClient.GetPod(ctx, id)
+	record, err := s.sandboxStore.GetByID(ctx, id)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get pod: %w", err)
+		return nil, err
 	}
-
-	sandbox := s.podToSandbox(pod)
-
-	// Add access URL to get response
-	gatewayURL := os.Getenv("GATEWAY_URL")
-	if gatewayURL == "" {
-		gatewayURL = "http://localhost:8080"
+	if record == nil || record.LifecycleStatus == "deleted" {
+		return nil, fmt.Errorf("sandbox not found")
 	}
-	sandbox.AccessURL = fmt.Sprintf("%s/api/v1/sandbox/%s", gatewayURL, id)
-
-	return sandbox, nil
+	return s.recordToSandbox(record)
 }
 
 func (s *SandboxService) List(ctx context.Context) (*model.SandboxListResponse, error) {
-	pods, err := s.k8sClient.ListPods(ctx)
+	records, err := s.sandboxStore.ListActive(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to list pods: %w", err)
+		return nil, err
 	}
 
-	items := make([]model.Sandbox, 0, len(pods.Items))
-	for _, pod := range pods.Items {
-		items = append(items, *s.podToSandbox(&pod))
+	items := make([]model.Sandbox, 0, len(records))
+	for i := range records {
+		sandbox, err := s.recordToSandbox(&records[i])
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, *sandbox)
 	}
 
 	return &model.SandboxListResponse{Items: items}, nil
 }
 
+func (s *SandboxService) ListMetadata(ctx context.Context, opts model.SandboxMetadataListOptions) (*model.SandboxMetadataListResponse, error) {
+	query := store.SandboxMetadataQuery{
+		ID:              opts.ID,
+		Template:        opts.Template,
+		DesiredState:    opts.DesiredState,
+		LifecycleStatus: opts.LifecycleStatus,
+		CreatedFrom:     opts.CreatedFrom,
+		CreatedTo:       opts.CreatedTo,
+		DeletedFrom:     opts.DeletedFrom,
+		DeletedTo:       opts.DeletedTo,
+		Page:            opts.Page,
+		PageSize:        opts.PageSize,
+	}
+	records, total, err := s.sandboxStore.ListMetadata(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+
+	page := opts.Page
+	if page <= 0 {
+		page = 1
+	}
+	pageSize := opts.PageSize
+	if pageSize <= 0 {
+		pageSize = 20
+	}
+	if pageSize > 100 {
+		pageSize = 100
+	}
+
+	items := make([]model.Sandbox, 0, len(records))
+	for i := range records {
+		items = append(items, s.recordToSandboxMetadata(&records[i]))
+	}
+	return &model.SandboxMetadataListResponse{
+		Items:    items,
+		Total:    total,
+		Page:     page,
+		PageSize: pageSize,
+	}, nil
+}
+
+func (s *SandboxService) GetStatusHistory(ctx context.Context, id string, limit int, beforeID int64) (*model.SandboxStatusHistoryResponse, error) {
+	history, err := s.sandboxStore.ListStatusHistory(ctx, id, limit, beforeID)
+	if err != nil {
+		return nil, err
+	}
+	items := make([]model.SandboxStatusHistoryItem, 0, len(history))
+	for i := range history {
+		items = append(items, model.SandboxStatusHistoryItem{
+			ID:         history[i].ID,
+			SandboxID:  history[i].SandboxID,
+			Source:     history[i].Source,
+			FromStatus: history[i].FromStatus,
+			ToStatus:   history[i].ToStatus,
+			Reason:     history[i].Reason,
+			PayloadRaw: history[i].PayloadRaw,
+			CreatedAt:  history[i].CreatedAt,
+		})
+	}
+	return &model.SandboxStatusHistoryResponse{Items: items}, nil
+}
+
 func (s *SandboxService) Delete(ctx context.Context, id string) error {
+	record, err := s.sandboxStore.GetByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	if record == nil {
+		return fmt.Errorf("sandbox not found")
+	}
+
+	fromStatus := record.LifecycleStatus
+	now := time.Now().UTC()
+	if err := s.sandboxStore.SetDesiredDeleted(ctx, id, now); err != nil {
+		return err
+	}
+	_ = s.sandboxStore.AppendStatusHistory(ctx, id, "api", fromStatus, string(model.SandboxStatusTerminating), "delete requested", nil, now)
+
 	netPolicyMgr := k8s.NewNetworkPolicyManager(s.k8sClient)
 	if err := netPolicyMgr.DeleteDomainAllowlistPolicy(ctx, id); err != nil {
 		logx.LoggerWithRequestID(ctx).With("component", "sandbox_service", "sandbox_id", id).
 			Warn("failed to delete domain allowlist policy", "error", err)
 	}
-	return s.k8sClient.DeletePod(ctx, id)
+
+	if err := s.k8sClient.DeletePod(ctx, id); err != nil && !apierrors.IsNotFound(err) {
+		_ = s.sandboxStore.UpdateStatus(ctx, id, string(model.SandboxStatusFailed), err.Error(), time.Now().UTC())
+		return err
+	}
+
+	if err := s.sandboxStore.MarkDeleted(ctx, id, "deleted by request", time.Now().UTC()); err != nil {
+		return err
+	}
+	_ = s.sandboxStore.AppendStatusHistory(ctx, id, "api", string(model.SandboxStatusTerminating), "deleted", "delete completed", nil, time.Now().UTC())
+	return nil
 }
 
 func (s *SandboxService) Exec(ctx context.Context, id string, req *model.ExecRequest) (*model.ExecResponse, error) {
@@ -425,86 +582,118 @@ func (s *SandboxService) StartTTLCleaner(interval time.Duration) {
 	}()
 }
 
+func (s *SandboxService) StartMetadataCleaner(interval time.Duration, retention time.Duration) {
+	ticker := time.NewTicker(interval)
+	go func() {
+		for range ticker.C {
+			s.cleanHistoricalData(retention)
+		}
+	}()
+}
+
+func (s *SandboxService) cleanHistoricalData(retention time.Duration) {
+	ctx := context.Background()
+	logger := slog.Default().With("component", "sandbox_metadata_cleaner")
+	if retention <= 0 {
+		return
+	}
+	cutoff := time.Now().UTC().Add(-retention)
+	res, err := s.sandboxStore.PurgeHistoricalData(ctx, cutoff)
+	if err != nil {
+		logger.Error("failed to purge sandbox metadata", "error", err, "cutoff", cutoff.Format(time.RFC3339))
+		return
+	}
+	if res.DeletedSandboxes+res.DeletedStatusHistory+res.DeletedReconcileRuns+res.DeletedReconcileItems > 0 {
+		logger.Info(
+			"purged sandbox metadata",
+			"cutoff", cutoff.Format(time.RFC3339),
+			"deleted_sandboxes", res.DeletedSandboxes,
+			"deleted_status_history", res.DeletedStatusHistory,
+			"deleted_reconcile_runs", res.DeletedReconcileRuns,
+			"deleted_reconcile_items", res.DeletedReconcileItems,
+		)
+	}
+}
+
 func (s *SandboxService) cleanExpiredSandboxes() {
 	ctx := context.Background()
 	logger := slog.Default().With("component", "sandbox_ttl_cleaner")
-	pods, err := s.k8sClient.ListPods(ctx)
+	expired, err := s.sandboxStore.ListExpiredActive(ctx, time.Now().UTC())
 	if err != nil {
-		logger.Error("failed to list pods", "error", err)
+		logger.Error("failed to list expired sandboxes", "error", err)
 		return
 	}
 
-	for _, pod := range pods.Items {
-		if s.isExpired(&pod) {
-			sandboxID := pod.Labels[k8s.LabelSandboxID]
-			logger.Info("deleting expired sandbox", "sandbox_id", sandboxID)
-			netPolicyMgr := k8s.NewNetworkPolicyManager(s.k8sClient)
-			if err := netPolicyMgr.DeleteDomainAllowlistPolicy(ctx, sandboxID); err != nil {
-				logger.Warn("failed to delete domain allowlist policy", "sandbox_id", sandboxID, "error", err)
-			}
-			if err := s.k8sClient.DeletePod(ctx, sandboxID); err != nil {
-				logger.Warn("failed to delete pod", "sandbox_id", sandboxID, "error", err)
-			}
+	for _, rec := range expired {
+		sandboxID := rec.ID
+		logger.Info("deleting expired sandbox", "sandbox_id", sandboxID)
+		netPolicyMgr := k8s.NewNetworkPolicyManager(s.k8sClient)
+		if err := netPolicyMgr.DeleteDomainAllowlistPolicy(ctx, sandboxID); err != nil {
+			logger.Warn("failed to delete domain allowlist policy", "sandbox_id", sandboxID, "error", err)
 		}
+
+		_ = s.sandboxStore.SetDesiredDeleted(ctx, sandboxID, time.Now().UTC())
+		if err := s.k8sClient.DeletePod(ctx, sandboxID); err != nil && !apierrors.IsNotFound(err) {
+			logger.Warn("failed to delete pod", "sandbox_id", sandboxID, "error", err)
+			_ = s.sandboxStore.UpdateStatus(ctx, sandboxID, string(model.SandboxStatusFailed), err.Error(), time.Now().UTC())
+			continue
+		}
+		if err := s.sandboxStore.MarkDeleted(ctx, sandboxID, "ttl expired", time.Now().UTC()); err != nil {
+			logger.Warn("failed to mark sandbox deleted", "sandbox_id", sandboxID, "error", err)
+		}
+		_ = s.sandboxStore.AppendStatusHistory(ctx, sandboxID, "ttl_cleaner", rec.LifecycleStatus, "deleted", "ttl expired", nil, time.Now().UTC())
 	}
 }
 
-func (s *SandboxService) isExpired(pod *corev1.Pod) bool {
-	createdAtStr := pod.Annotations[k8s.AnnotationCreatedAt]
-	ttlStr := pod.Annotations[k8s.AnnotationTTL]
-
-	createdAt, err := time.Parse(time.RFC3339, createdAtStr)
+func (s *SandboxService) recordToSandbox(record *store.SandboxRecord) (*model.Sandbox, error) {
+	accessToken, err := s.tokenCipher.Decrypt(record.AccessTokenCiphertext, record.AccessTokenNonce)
 	if err != nil {
-		return false
+		return nil, fmt.Errorf("failed to decrypt access token: %w", err)
 	}
-
-	ttl, err := strconv.Atoi(ttlStr)
-	if err != nil {
-		return false
-	}
-
-	expiresAt := createdAt.Add(time.Duration(ttl) * time.Second)
-	return time.Now().After(expiresAt)
+	sandbox := s.recordToSandboxMetadata(record)
+	sandbox.AccessToken = accessToken
+	return &sandbox, nil
 }
 
-func (s *SandboxService) podToSandbox(pod *corev1.Pod) *model.Sandbox {
-	sandboxID := pod.Labels[k8s.LabelSandboxID]
-	createdAtStr := pod.Annotations[k8s.AnnotationCreatedAt]
-	ttlStr := pod.Annotations[k8s.AnnotationTTL]
-
-	createdAt, _ := time.Parse(time.RFC3339, createdAtStr)
-	ttl, _ := strconv.Atoi(ttlStr)
-	expiresAt := createdAt.Add(time.Duration(ttl) * time.Second)
-
-	var image string
-	if len(pod.Spec.Containers) > 0 {
-		image = pod.Spec.Containers[0].Image
+func (s *SandboxService) recordToSandboxMetadata(record *store.SandboxRecord) model.Sandbox {
+	return model.Sandbox{
+		ID:              record.ID,
+		Image:           record.Image,
+		CPU:             record.CPU,
+		Memory:          record.Memory,
+		TTL:             record.TTL,
+		Env:             record.EnvMap(),
+		Status:          parseLifecycleStatus(record.LifecycleStatus),
+		Template:        record.TemplateName,
+		TemplateVersion: record.TemplateVersion,
+		DesiredState:    record.DesiredState,
+		LifecycleStatus: record.LifecycleStatus,
+		StatusReason:    record.StatusReason,
+		PodPhase:        record.PodPhase,
+		PodIP:           record.PodIP,
+		LastSeenAt:      record.LastSeenAt,
+		CreatedAt:       record.CreatedAt,
+		ExpiresAt:       record.ExpiresAt,
+		UpdatedAt:       record.UpdatedAt,
+		DeletedAt:       record.DeletedAt,
+		AccessURL:       record.AccessURL,
 	}
+}
 
-	var cpu, memory string
-	if len(pod.Spec.Containers) > 0 {
-		limits := pod.Spec.Containers[0].Resources.Limits
-		if cpuQty, ok := limits[corev1.ResourceCPU]; ok {
-			cpu = cpuQty.String()
-		}
-		if memQty, ok := limits[corev1.ResourceMemory]; ok {
-			memory = memQty.String()
-		}
-	}
-
-	// Get access token from annotations
-	accessToken := pod.Annotations[k8s.AnnotationAccessToken]
-
-	return &model.Sandbox{
-		ID:          sandboxID,
-		Image:       image,
-		CPU:         cpu,
-		Memory:      memory,
-		TTL:         ttl,
-		Status:      convertPodStatus(pod),
-		CreatedAt:   createdAt,
-		ExpiresAt:   expiresAt,
-		AccessToken: accessToken,
+func parseLifecycleStatus(v string) model.SandboxStatus {
+	switch v {
+	case string(model.SandboxStatusPending), "creating":
+		return model.SandboxStatusPending
+	case string(model.SandboxStatusRunning):
+		return model.SandboxStatusRunning
+	case string(model.SandboxStatusSucceeded):
+		return model.SandboxStatusSucceeded
+	case string(model.SandboxStatusFailed):
+		return model.SandboxStatusFailed
+	case string(model.SandboxStatusTerminating):
+		return model.SandboxStatusTerminating
+	default:
+		return model.SandboxStatusUnknown
 	}
 }
 

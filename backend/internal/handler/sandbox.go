@@ -4,6 +4,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/fslongjin/liteboxd/backend/internal/lifecycle"
 	"github.com/fslongjin/liteboxd/backend/internal/model"
@@ -13,12 +14,13 @@ import (
 )
 
 type SandboxHandler struct {
-	svc        *service.SandboxService
-	drainState *lifecycle.DrainManager
+	svc          *service.SandboxService
+	reconcileSvc *service.SandboxReconcileService
+	drainState   *lifecycle.DrainManager
 }
 
-func NewSandboxHandler(svc *service.SandboxService, drainState *lifecycle.DrainManager) *SandboxHandler {
-	return &SandboxHandler{svc: svc, drainState: drainState}
+func NewSandboxHandler(svc *service.SandboxService, reconcileSvc *service.SandboxReconcileService, drainState *lifecycle.DrainManager) *SandboxHandler {
+	return &SandboxHandler{svc: svc, reconcileSvc: reconcileSvc, drainState: drainState}
 }
 
 func (h *SandboxHandler) RegisterRoutes(r *gin.RouterGroup) {
@@ -26,7 +28,12 @@ func (h *SandboxHandler) RegisterRoutes(r *gin.RouterGroup) {
 	{
 		sandboxes.POST("", h.Create)
 		sandboxes.GET("", h.List)
+		sandboxes.GET("/metadata", h.ListMetadata)
+		sandboxes.POST("/reconcile", h.TriggerReconcile)
+		sandboxes.GET("/reconcile/runs", h.ListReconcileRuns)
+		sandboxes.GET("/reconcile/runs/:id", h.GetReconcileRun)
 		sandboxes.GET("/:id", h.Get)
+		sandboxes.GET("/:id/status-history", h.GetStatusHistory)
 		sandboxes.DELETE("/:id", h.Delete)
 		sandboxes.POST("/:id/exec", h.Exec)
 		sandboxes.GET("/:id/exec/interactive", h.ExecInteractive)
@@ -74,6 +81,62 @@ func (h *SandboxHandler) Get(c *gin.Context) {
 	c.JSON(http.StatusOK, sandbox)
 }
 
+func (h *SandboxHandler) ListMetadata(c *gin.Context) {
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
+
+	parseRFC3339 := func(name string) (*time.Time, error) {
+		v := c.Query(name)
+		if v == "" {
+			return nil, nil
+		}
+		t, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			return nil, err
+		}
+		return &t, nil
+	}
+
+	createdFrom, err := parseRFC3339("created_from")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid created_from, expected RFC3339"})
+		return
+	}
+	createdTo, err := parseRFC3339("created_to")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid created_to, expected RFC3339"})
+		return
+	}
+	deletedFrom, err := parseRFC3339("deleted_from")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid deleted_from, expected RFC3339"})
+		return
+	}
+	deletedTo, err := parseRFC3339("deleted_to")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid deleted_to, expected RFC3339"})
+		return
+	}
+
+	resp, err := h.svc.ListMetadata(c.Request.Context(), model.SandboxMetadataListOptions{
+		ID:              c.Query("id"),
+		Template:        c.Query("template"),
+		DesiredState:    c.Query("desired_state"),
+		LifecycleStatus: c.Query("lifecycle_status"),
+		CreatedFrom:     createdFrom,
+		CreatedTo:       createdTo,
+		DeletedFrom:     deletedFrom,
+		DeletedTo:       deletedTo,
+		Page:            page,
+		PageSize:        pageSize,
+	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
 func (h *SandboxHandler) Delete(c *gin.Context) {
 	id := c.Param("id")
 
@@ -84,6 +147,58 @@ func (h *SandboxHandler) Delete(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusNoContent, nil)
+}
+
+func (h *SandboxHandler) GetStatusHistory(c *gin.Context) {
+	id := c.Param("id")
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+	beforeID, _ := strconv.ParseInt(c.DefaultQuery("before_id", "0"), 10, 64)
+
+	resp, err := h.svc.GetStatusHistory(c.Request.Context(), id, limit, beforeID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
+func (h *SandboxHandler) TriggerReconcile(c *gin.Context) {
+	resp, err := h.reconcileSvc.Run(c.Request.Context(), "manual")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusAccepted, resp)
+}
+
+func (h *SandboxHandler) ListReconcileRuns(c *gin.Context) {
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	resp, err := h.reconcileSvc.ListRuns(c.Request.Context(), limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
+func (h *SandboxHandler) GetReconcileRun(c *gin.Context) {
+	id := c.Param("id")
+	resp, err := h.reconcileSvc.GetRun(c.Request.Context(), id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if resp == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "reconcile run not found"})
+		return
+	}
+	c.JSON(http.StatusOK, resp)
 }
 
 func (h *SandboxHandler) Exec(c *gin.Context) {

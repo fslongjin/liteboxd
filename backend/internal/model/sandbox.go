@@ -23,8 +23,16 @@ type Sandbox struct {
 	Status          SandboxStatus     `json:"status"`
 	Template        string            `json:"template,omitempty"`
 	TemplateVersion int               `json:"templateVersion,omitempty"`
+	DesiredState    string            `json:"desired_state,omitempty"`
+	LifecycleStatus string            `json:"lifecycle_status,omitempty"`
+	StatusReason    string            `json:"status_reason,omitempty"`
+	PodPhase        string            `json:"pod_phase,omitempty"`
+	PodIP           string            `json:"pod_ip,omitempty"`
+	LastSeenAt      *time.Time        `json:"last_seen_at,omitempty"`
 	CreatedAt       time.Time         `json:"created_at"`
 	ExpiresAt       time.Time         `json:"expires_at"`
+	UpdatedAt       time.Time         `json:"updated_at"`
+	DeletedAt       *time.Time        `json:"deleted_at,omitempty"`
 
 	// Network access fields
 	AccessToken string `json:"accessToken,omitempty"` // Access token for inbound requests
@@ -62,6 +70,41 @@ type ExecResponse struct {
 
 type SandboxListResponse struct {
 	Items []Sandbox `json:"items"`
+}
+
+type SandboxMetadataListOptions struct {
+	ID              string
+	Template        string
+	DesiredState    string
+	LifecycleStatus string
+	CreatedFrom     *time.Time
+	CreatedTo       *time.Time
+	DeletedFrom     *time.Time
+	DeletedTo       *time.Time
+	Page            int
+	PageSize        int
+}
+
+type SandboxMetadataListResponse struct {
+	Items    []Sandbox `json:"items"`
+	Total    int       `json:"total"`
+	Page     int       `json:"page"`
+	PageSize int       `json:"page_size"`
+}
+
+type SandboxStatusHistoryItem struct {
+	ID         int64     `json:"id"`
+	SandboxID  string    `json:"sandbox_id"`
+	Source     string    `json:"source"`
+	FromStatus string    `json:"from_status"`
+	ToStatus   string    `json:"to_status"`
+	Reason     string    `json:"reason"`
+	PayloadRaw string    `json:"payload_json"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
+type SandboxStatusHistoryResponse struct {
+	Items []SandboxStatusHistoryItem `json:"items"`
 }
 
 type LogsResponse struct {

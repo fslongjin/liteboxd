@@ -136,6 +136,7 @@ type CreatePodOptions struct {
 	StartupFiles   []FileSpec   // Files to upload before startup script
 	ReadinessProbe *ProbeSpec   // Readiness probe configuration
 	Network        *NetworkSpec // Network configuration
+	AccessToken    string       // Access token injected by control-plane (optional)
 }
 
 // NetworkSpec defines the network configuration for a pod
@@ -208,8 +209,11 @@ func containerWithCommandAndArgs(opts CreatePodOptions) corev1.Container {
 func (c *Client) CreatePod(ctx context.Context, opts CreatePodOptions) (*corev1.Pod, error) {
 	podName := fmt.Sprintf("sandbox-%s", opts.ID)
 
-	// Generate access token for sandbox network access
-	accessToken := generateAccessToken()
+	// Generate access token for sandbox network access when not provided by control-plane.
+	accessToken := opts.AccessToken
+	if accessToken == "" {
+		accessToken = generateAccessToken()
+	}
 
 	// Build annotations
 	annotations := map[string]string{

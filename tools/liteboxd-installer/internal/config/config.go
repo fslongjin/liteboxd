@@ -73,13 +73,20 @@ type CiliumConfig struct {
 }
 
 type LiteBoxdConfig struct {
-	NamespaceSystem        string      `yaml:"namespaceSystem"`
-	NamespaceSandbox       string      `yaml:"namespaceSandbox"`
-	IngressHost            string      `yaml:"ingressHost"`
-	GatewayURL             string      `yaml:"gatewayURL"`
-	ConfigDir              string      `yaml:"configDir"`
-	Images                 ImageConfig `yaml:"images"`
-	DeploySandboxResources *bool       `yaml:"deploySandboxResources"`
+	NamespaceSystem        string         `yaml:"namespaceSystem"`
+	NamespaceSandbox       string         `yaml:"namespaceSandbox"`
+	IngressHost            string         `yaml:"ingressHost"`
+	GatewayURL             string         `yaml:"gatewayURL"`
+	MetadataRetentionDays  int            `yaml:"metadataRetentionDays"`
+	Security               SecurityConfig `yaml:"security"`
+	ConfigDir              string         `yaml:"configDir"`
+	Images                 ImageConfig    `yaml:"images"`
+	DeploySandboxResources *bool          `yaml:"deploySandboxResources"`
+}
+
+type SecurityConfig struct {
+	SandboxTokenEncryptionKey   string `yaml:"sandboxTokenEncryptionKey"`
+	SandboxTokenEncryptionKeyID string `yaml:"sandboxTokenEncryptionKeyID"`
 }
 
 type ImageConfig struct {
@@ -192,6 +199,12 @@ func (c *Config) setDefaults(configPath string) {
 	if c.LiteBoxd.DeploySandboxResources == nil {
 		v := true
 		c.LiteBoxd.DeploySandboxResources = &v
+	}
+	if c.LiteBoxd.MetadataRetentionDays <= 0 {
+		c.LiteBoxd.MetadataRetentionDays = 7
+	}
+	if c.LiteBoxd.Security.SandboxTokenEncryptionKeyID == "" {
+		c.LiteBoxd.Security.SandboxTokenEncryptionKeyID = "v1"
 	}
 
 	if c.Runtime.Parallelism <= 0 {

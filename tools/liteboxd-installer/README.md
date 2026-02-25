@@ -52,6 +52,8 @@ make build-installer
 - `cluster.master.nodeIP` / `cluster.agents[].nodeIP` 用于集群内节点地址（join / kubeconfig / cilium）
 - `liteboxd.ingressHost` 可配置 Ingress 域名（默认 `liteboxd.local`）
 - `liteboxd.gatewayURL` 可配置返回给业务侧的访问基地址（默认回退到集群内 `liteboxd-gateway` Service 地址）
+- `liteboxd.metadataRetentionDays` 可配置沙箱元数据保留天数（默认 7，对应环境变量 `SANDBOX_METADATA_RETENTION_DAYS`）
+- `liteboxd.security.sandboxTokenEncryptionKey` / `liteboxd.security.sandboxTokenEncryptionKeyID` 可在 installer 配置中覆盖默认的 token 加密参数（建议用环境变量注入）
 - 为安全起见，建议使用环境变量注入密码（`${MASTER_PASS}`）
 - `--cluster-only` 模式下可只维护 K3s/Cilium/节点，不执行 LiteBoxd 部署步骤
 - `--cluster-only` 模式可不提供 `liteboxd.configDir` 和 `liteboxd.images`

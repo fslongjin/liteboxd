@@ -49,6 +49,21 @@ spec:
                 configMapKeyRef:
                   name: liteboxd-config
                   key: GATEWAY_URL
+            - name: SANDBOX_TOKEN_ENCRYPTION_KEY
+              valueFrom:
+                configMapKeyRef:
+                  name: liteboxd-config
+                  key: SANDBOX_TOKEN_ENCRYPTION_KEY
+            - name: SANDBOX_TOKEN_ENCRYPTION_KEY_ID
+              valueFrom:
+                configMapKeyRef:
+                  name: liteboxd-config
+                  key: SANDBOX_TOKEN_ENCRYPTION_KEY_ID
+            - name: SANDBOX_METADATA_RETENTION_DAYS
+              valueFrom:
+                configMapKeyRef:
+                  name: liteboxd-config
+                  key: SANDBOX_METADATA_RETENTION_DAYS
             - name: SHUTDOWN_TIMEOUT
               value: 120s
             - name: LOG_LEVEL

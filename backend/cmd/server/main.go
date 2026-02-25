@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/fslongjin/liteboxd/backend/internal/k8s"
 	"github.com/fslongjin/liteboxd/backend/internal/lifecycle"
 	"github.com/fslongjin/liteboxd/backend/internal/logx"
+	"github.com/fslongjin/liteboxd/backend/internal/security"
 	"github.com/fslongjin/liteboxd/backend/internal/service"
 	"github.com/fslongjin/liteboxd/backend/internal/store"
 	"github.com/gin-contrib/cors"
@@ -88,15 +90,40 @@ func main() {
 	templateSvc := service.NewTemplateService()
 	prepullSvc := service.NewPrepullService(k8sClient)
 	importExportSvc := service.NewImportExportService(templateSvc, prepullSvc)
-	sandboxSvc := service.NewSandboxService(k8sClient)
+	tokenCipher, err := security.NewTokenCipherFromEnv()
+	if err != nil {
+		log.Fatalf("Failed to initialize token cipher: %v", err)
+	}
+	sandboxStore := store.NewSandboxStore()
+	sandboxSvc := service.NewSandboxService(k8sClient, sandboxStore, tokenCipher)
+	reconcileSvc := service.NewSandboxReconcileService(k8sClient, sandboxStore)
 	sandboxSvc.SetTemplateService(templateSvc)
 	templateSvc.SetPrepullService(prepullSvc)
 
 	sandboxSvc.StartTTLCleaner(30 * time.Second)
 	slog.Info("ttl cleaner started", "component", "sandbox_service", "interval", "30s")
 
+	retentionDays := 7
+	if v := os.Getenv("SANDBOX_METADATA_RETENTION_DAYS"); v != "" {
+		if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 {
+			retentionDays = parsed
+		} else {
+			slog.Warn("invalid SANDBOX_METADATA_RETENTION_DAYS, fallback to default", "value", v, "default_days", retentionDays)
+		}
+	}
+	sandboxSvc.StartMetadataCleaner(1*time.Hour, time.Duration(retentionDays)*24*time.Hour)
+	slog.Info("metadata cleaner started", "component", "sandbox_service", "interval", "1h", "retention_days", retentionDays)
+
 	prepullSvc.StartStatusUpdater(10 * time.Second)
 	slog.Info("prepull status updater started", "component", "prepull_service", "interval", "10s")
+	reconcileSvc.Start(1 * time.Minute)
+	slog.Info("sandbox reconciler started", "component", "sandbox_reconciler", "interval", "1m")
+
+	go func() {
+		if _, err := reconcileSvc.Run(context.Background(), "startup"); err != nil {
+			slog.Warn("startup reconcile failed", "component", "sandbox_reconciler", "error", err)
+		}
+	}()
 
 	// Start cleanup for completed prepull DaemonSets
 	go func() {
@@ -110,7 +137,7 @@ func main() {
 	drainState := lifecycle.NewDrainManager()
 
 	// Create handlers
-	sandboxHandler := handler.NewSandboxHandler(sandboxSvc, drainState)
+	sandboxHandler := handler.NewSandboxHandler(sandboxSvc, reconcileSvc, drainState)
 	templateHandler := handler.NewTemplateHandler(templateSvc)
 	prepullHandler := handler.NewPrepullHandler(prepullSvc, templateSvc)
 	importExportHandler := handler.NewImportExportHandler(importExportSvc)

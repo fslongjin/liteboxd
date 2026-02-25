@@ -51,6 +51,10 @@ liteboxd:
   namespaceSandbox: "liteboxd-sandbox"
   ingressHost: "liteboxd.example.com"
   gatewayURL: "http://liteboxd.example.com"
+  metadataRetentionDays: 7
+  security:
+    sandboxTokenEncryptionKey: "${SANDBOX_TOKEN_KEY}"
+    sandboxTokenEncryptionKeyID: "v1"
   configDir: "./deploy-config/prod"
   images:
     api: "registry.example.com/liteboxd/liteboxd-server:v0.2.0"
