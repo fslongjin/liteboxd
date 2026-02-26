@@ -10,18 +10,10 @@ metadata:
 spec:
   ingressClassName: traefik
   rules:
-    - host: liteboxd.local
+    # Gateway (public domain) - users access sandboxes via this host.
+    - host: gateway.liteboxd.local
       http:
         paths:
-          # Web frontend (catch-all route, must be last)
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: liteboxd-web
-                port:
-                  number: 80
-          # Keep gateway route strict to avoid matching /api/v1/sandboxes.
           - path: /api/v1/sandbox/
             pathType: Prefix
             backend:
@@ -36,6 +28,10 @@ spec:
                 name: liteboxd-gateway
                 port:
                   number: 8081
+    # Backend API + Web frontend (shared domain)
+    - host: liteboxd.local
+      http:
+        paths:
           - path: /api/v1
             pathType: Prefix
             backend:
@@ -43,3 +39,10 @@ spec:
                 name: liteboxd-api
                 port:
                   number: 8080
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: liteboxd-web
+                port:
+                  number: 80

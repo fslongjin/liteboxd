@@ -50,7 +50,8 @@ liteboxd:
   namespaceSystem: "liteboxd-system"
   namespaceSandbox: "liteboxd-sandbox"
   ingressHost: "liteboxd.example.com"
-  gatewayURL: "http://liteboxd.example.com"
+  gatewayIngressHost: "gateway.example.com"
+  gatewayURL: "http://gateway.example.com"
   metadataRetentionDays: 7
   security:
     sandboxTokenEncryptionKey: "${SANDBOX_TOKEN_KEY}"

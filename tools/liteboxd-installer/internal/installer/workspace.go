@@ -58,7 +58,7 @@ func (i *Installer) buildDeployWorkspace() (string, func(), error) {
 func (i *Installer) systemOverlayKustomization() string {
 	sysNS := i.cfg.LiteBoxd.NamespaceSystem
 	sandboxNS := i.cfg.LiteBoxd.NamespaceSandbox
-	gatewayURL := fmt.Sprintf("http://liteboxd-gateway.%s.svc.cluster.local:8081", sysNS)
+	gatewayURL := fmt.Sprintf("http://%s", i.cfg.LiteBoxd.GatewayIngressHost)
 	if strings.TrimSpace(i.cfg.LiteBoxd.GatewayURL) != "" {
 		gatewayURL = strings.TrimSpace(i.cfg.LiteBoxd.GatewayURL)
 	}
@@ -82,7 +82,7 @@ func (i *Installer) systemOverlayKustomization() string {
 	if tokenKeyID != "" {
 		b.WriteString("      - op: replace\n        path: /data/SANDBOX_TOKEN_ENCRYPTION_KEY_ID\n        value: " + tokenKeyID + "\n")
 	}
-	b.WriteString("  - target:\n      kind: Ingress\n      name: liteboxd\n    patch: |-\n      - op: replace\n        path: /spec/rules/0/host\n        value: " + i.cfg.LiteBoxd.IngressHost + "\n")
+	b.WriteString("  - target:\n      kind: Ingress\n      name: liteboxd\n    patch: |-\n      - op: replace\n        path: /spec/rules/0/host\n        value: " + i.cfg.LiteBoxd.GatewayIngressHost + "\n      - op: replace\n        path: /spec/rules/1/host\n        value: " + i.cfg.LiteBoxd.IngressHost + "\n")
 	b.WriteString("  - target:\n      kind: Deployment\n      name: liteboxd-api\n    patch: |-\n      - op: replace\n        path: /spec/template/spec/containers/0/image\n        value: " + i.cfg.LiteBoxd.Images.API + "\n")
 	b.WriteString("  - target:\n      kind: Deployment\n      name: liteboxd-gateway\n    patch: |-\n      - op: replace\n        path: /spec/template/spec/containers/0/image\n        value: " + i.cfg.LiteBoxd.Images.Gateway + "\n")
 	b.WriteString("  - target:\n      kind: Deployment\n      name: liteboxd-web\n    patch: |-\n      - op: replace\n        path: /spec/template/spec/containers/0/image\n        value: " + i.cfg.LiteBoxd.Images.Web + "\n")
