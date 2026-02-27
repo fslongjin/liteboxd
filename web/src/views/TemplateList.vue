@@ -11,7 +11,7 @@
             <template #icon><export-icon /></template>
             导出
           </t-button>
-          <t-button theme="primary" @click="showCreateDialog = true">
+          <t-button theme="primary" @click="openCreateDialog">
             <template #icon><add-icon /></template>
             新建模板
           </t-button>
@@ -82,104 +82,7 @@
       :confirm-btn="{ content: isEdit ? '更新' : '创建', loading: saving }"
       @confirm="saveTemplate"
     >
-      <t-form
-        :data="form"
-        :rules="formRules"
-        ref="formRef"
-        label-width="100px"
-        class="template-form"
-      >
-        <t-tabs v-model="dialogTab" theme="card">
-          <t-tab-panel value="basic" label="基本信息">
-            <div class="dialog-tab-content">
-              <t-form-item label="名称" name="name">
-                <t-input
-                  v-model="form.name"
-                  placeholder="英文名称，如: python-dev"
-                  :disabled="isEdit"
-                />
-              </t-form-item>
-              <t-form-item label="显示名称" name="displayName">
-                <t-input v-model="form.displayName" placeholder="如: Python 开发环境" />
-              </t-form-item>
-              <t-form-item label="描述" name="description">
-                <t-textarea v-model="form.description" placeholder="模板描述" :maxlength="200" />
-              </t-form-item>
-              <t-form-item label="标签" name="tags">
-                <t-tag-input v-model="form.tags" placeholder="按回车添加标签" clearable />
-              </t-form-item>
-            </div>
-          </t-tab-panel>
-
-          <t-tab-panel value="image" label="镜像配置">
-            <div class="dialog-tab-content">
-              <t-form-item label="镜像" name="spec.image">
-                <t-input v-model="form.spec.image" placeholder="如: python:3.11-slim" />
-              </t-form-item>
-              <t-divider>容器入口</t-divider>
-              <t-form-item label="Command">
-                <t-tag-input v-model="form.spec.command" placeholder="留空使用镜像默认" clearable />
-              </t-form-item>
-              <t-form-item label="Args">
-                <t-tag-input v-model="form.spec.args" placeholder="留空使用镜像默认" clearable />
-              </t-form-item>
-              <t-divider>环境与脚本</t-divider>
-              <t-form-item label="环境变量">
-                <t-textarea
-                  v-model="envText"
-                  placeholder="KEY=value&#10;KEY2=value2"
-                  :autosize="{ minRows: 3, maxRows: 6 }"
-                />
-              </t-form-item>
-              <t-form-item label="启动脚本">
-                <t-textarea
-                  v-model="form.spec.startupScript"
-                  placeholder="容器启动后执行的 Shell 脚本"
-                  :autosize="{ minRows: 3, maxRows: 6 }"
-                />
-              </t-form-item>
-            </div>
-          </t-tab-panel>
-
-          <t-tab-panel value="resource" label="资源与网络">
-            <div class="dialog-tab-content">
-              <t-form-item label="CPU">
-                <t-input v-model="form.spec.resources.cpu" placeholder="如: 500m" />
-              </t-form-item>
-              <t-form-item label="内存">
-                <t-input v-model="form.spec.resources.memory" placeholder="如: 512Mi" />
-              </t-form-item>
-              <t-form-item label="TTL (秒)">
-                <t-input-number v-model="form.spec.ttl" :min="60" :max="86400" />
-              </t-form-item>
-              <t-form-item label="启动超时">
-                <t-input-number
-                  v-model="form.spec.startupTimeout"
-                  :min="30"
-                  :max="600"
-                  suffix="秒"
-                />
-              </t-form-item>
-              <t-divider>高级选项</t-divider>
-              <t-form-item label="自动预拉取">
-                <t-switch v-model="form.autoPrepull" />
-              </t-form-item>
-              <t-form-item label="公网访问">
-                <t-switch v-model="networkAllowInternet" />
-              </t-form-item>
-              <t-form-item v-if="networkAllowInternet" label="域名白名单">
-                <div class="domain-whitelist-field">
-                  <t-tag-input
-                    v-model="networkAllowedDomains"
-                    placeholder="如: *.example.com"
-                    clearable
-                  />
-                </div>
-              </t-form-item>
-            </div>
-          </t-tab-panel>
-        </t-tabs>
-      </t-form>
+      <TemplateForm ref="templateFormRef" :is-edit="isEdit" :initial-data="formData" />
     </t-dialog>
 
     <!-- Import Dialog -->
@@ -247,6 +150,7 @@ import {
   type UpdateTemplateRequest,
 } from '../api/template'
 import PrepullPanel from '../components/PrepullPanel.vue'
+import TemplateForm from '../components/TemplateForm.vue'
 
 const router = useRouter()
 const route = useRoute()
@@ -260,12 +164,13 @@ const showImportDialog = ref(false)
 const showExportDialog = ref(false)
 const isEdit = ref(false)
 const editingTemplate = ref<Template | null>(null)
-const formRef = ref()
+const templateFormRef = ref()
 const activeTab = ref('all')
 
-const dialogTab = ref('basic')
+// Initial data for the form
+const formData = ref<(CreateTemplateRequest & { autoPrepull?: boolean }) | null>(null)
 
-const form = ref<CreateTemplateRequest & { autoPrepull?: boolean }>({
+const defaultFormData: CreateTemplateRequest & { autoPrepull?: boolean } = {
   name: '',
   displayName: '',
   description: '',
@@ -281,7 +186,7 @@ const form = ref<CreateTemplateRequest & { autoPrepull?: boolean }>({
     startupTimeout: 300,
   },
   autoPrepull: false,
-})
+}
 
 const importForm = ref({
   files: [] as any[],
@@ -300,14 +205,6 @@ const pagination = ref({
   total: 0,
 })
 
-const formRules = {
-  name: [
-    { required: true, message: '请输入模板名称' },
-    { pattern: /^[a-z0-9-]+$/, message: '只能包含小写字母、数字和连字符' },
-  ],
-  'spec.image': [{ required: true, message: '请输入镜像' }],
-}
-
 const columns = [
   { colKey: 'name', title: '名称', ellipsis: true },
   { colKey: 'image', title: '镜像', ellipsis: true },
@@ -316,45 +213,6 @@ const columns = [
   { colKey: 'createdAt', title: '创建时间', width: 180 },
   { colKey: 'operation', title: '操作', width: 100 },
 ]
-
-const envText = computed({
-  get: () => {
-    const env = form.value.spec.env || {}
-    return Object.entries(env)
-      .map(([k, v]) => `${k}=${v}`)
-      .join('\n')
-  },
-  set: (val: string) => {
-    const env: Record<string, string> = {}
-    val.split('\n').forEach((line) => {
-      const [k, ...vParts] = line.split('=')
-      if (k && vParts.length > 0) {
-        env[k] = vParts.join('=')
-      }
-    })
-    form.value.spec.env = env
-  },
-})
-
-const networkAllowInternet = computed({
-  get: () => form.value.spec.network?.allowInternetAccess ?? false,
-  set: (v: boolean) => {
-    if (!form.value.spec.network) {
-      form.value.spec.network = { allowInternetAccess: false, allowedDomains: [] }
-    }
-    form.value.spec.network.allowInternetAccess = v
-  },
-})
-
-const networkAllowedDomains = computed({
-  get: () => form.value.spec.network?.allowedDomains ?? [],
-  set: (v: string[]) => {
-    if (!form.value.spec.network) {
-      form.value.spec.network = { allowInternetAccess: false, allowedDomains: [] }
-    }
-    form.value.spec.network.allowedDomains = v
-  },
-})
 
 const filteredTemplates = computed(() => {
   const start = (pagination.value.current - 1) * pagination.value.pageSize
@@ -380,27 +238,38 @@ const loadTemplates = async () => {
   }
 }
 
+const openCreateDialog = () => {
+  isEdit.value = false
+  editingTemplate.value = null
+  // Reset form data by creating a deep copy of default
+  formData.value = JSON.parse(JSON.stringify(defaultFormData))
+  showCreateDialog.value = true
+}
+
 const saveTemplate = async () => {
-  const valid = await formRef.value?.validate()
+  const valid = await templateFormRef.value?.validate()
   if (valid !== true) return
 
   saving.value = true
   try {
-    const data = { ...form.value }
-    delete (data as any).autoPrepull
+    const data = templateFormRef.value.getData()
+    // Make a copy to avoid mutating the form data directly if needed,
+    // although getData returns the reactive object from component.
+    const requestData = { ...data }
+    delete (requestData as any).autoPrepull
 
     if (isEdit.value && editingTemplate.value) {
       const updateData: UpdateTemplateRequest = {
-        displayName: data.displayName,
-        description: data.description,
-        tags: data.tags,
-        spec: data.spec,
+        displayName: requestData.displayName,
+        description: requestData.description,
+        tags: requestData.tags,
+        spec: requestData.spec,
         changelog: '通过 Web UI 更新',
       }
       await templateApi.update(editingTemplate.value.name, updateData)
       MessagePlugin.success('更新成功')
     } else {
-      await templateApi.create(data)
+      await templateApi.create(requestData)
       MessagePlugin.success('创建成功')
     }
     showCreateDialog.value = false
@@ -419,7 +288,7 @@ const saveTemplate = async () => {
 const editTemplate = (tmpl: Template) => {
   isEdit.value = true
   editingTemplate.value = tmpl
-  form.value = {
+  formData.value = {
     name: tmpl.name,
     displayName: tmpl.displayName,
     description: tmpl.description,
@@ -628,28 +497,5 @@ onMounted(() => {
 .image-text {
   font-family: monospace;
   font-size: 12px;
-}
-
-.dialog-tab-content {
-  padding: 24px 0;
-  min-height: 400px;
-}
-
-/* 域名白名单：输入框与下方提示纵向排列，提示紧贴输入框 */
-.domain-whitelist-field {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  width: 100%;
-  gap: 2px;
-}
-
-/* 直接由容器 gap 控制间距，避免与组件默认 margin 叠加 */
-.domain-whitelist-hint {
-  margin: 0;
-  padding: 0;
-  font-size: 12px;
-  line-height: 1.4;
-  color: var(--td-warning-color);
 }
 </style>

@@ -122,7 +122,7 @@
 
 <script setup lang="ts">
 import { ref, watch, onMounted, onUnmounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import { MessagePlugin } from 'tdesign-vue-next'
 import { SearchIcon, AddIcon } from 'tdesign-icons-vue-next'
 import { debounce } from 'lodash-es'
@@ -130,6 +130,7 @@ import { sandboxApi, type Sandbox, type CreateSandboxRequest } from '../api/sand
 import { templateApi, type Template } from '../api/template'
 
 const router = useRouter()
+const route = useRoute()
 const sandboxes = ref<Sandbox[]>([])
 const templates = ref<Template[]>([])
 const loading = ref(false)
@@ -352,9 +353,20 @@ watch(templateSearch, () => {
   debouncedSearch()
 })
 
+// Check for query parameters on mount to pre-open dialog
 onMounted(() => {
   loadSandboxes()
-  loadTemplates()
+  loadTemplates().then(() => {
+    // Check if we should open the template dialog
+    const tmplName = route.query.template as string
+    if (tmplName) {
+      showTemplateSelect.value = true
+      selectedTemplate.value = tmplName
+
+      // Clean up URL so refresh doesn't keep opening it
+      router.replace({ path: '/sandboxes', query: {} })
+    }
+  })
   startRefresh()
 })
 
