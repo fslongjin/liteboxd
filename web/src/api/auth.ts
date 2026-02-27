@@ -31,9 +31,16 @@ export interface CreateAPIKeyRequest {
   expires_in_days?: number
 }
 
+export interface ChangePasswordRequest {
+  old_password: string
+  new_password: string
+}
+
 export const authApi = {
   login: (data: LoginRequest) =>
     api.post<{ message: string; username: string }>('/auth/login', data),
+
+  changePassword: (data: ChangePasswordRequest) => api.post('/auth/change-password', data),
 
   logout: () => api.post('/auth/logout'),
 

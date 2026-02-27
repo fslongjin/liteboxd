@@ -65,6 +65,7 @@ const username = ref('')
 
 const userMenuOptions = [
   { content: 'API Keys', value: 'api-keys' },
+  { content: '修改密码', value: 'change-password' },
   { content: '登出', value: 'logout' },
 ]
 
@@ -75,6 +76,8 @@ const navigateTo = (path: string) => {
 const onUserMenuClick = async (data: { value: string }) => {
   if (data.value === 'api-keys') {
     router.push('/settings/api-keys')
+  } else if (data.value === 'change-password') {
+    router.push('/settings/change-password')
   } else if (data.value === 'logout') {
     try {
       await authApi.logout()
