@@ -82,120 +82,104 @@
       :confirm-btn="{ content: isEdit ? '更新' : '创建', loading: saving }"
       @confirm="saveTemplate"
     >
-      <div class="template-form-scroll">
-        <t-form :data="form" :rules="formRules" ref="formRef" label-width="100px">
-          <t-form-item label="名称" name="name">
-            <t-input
-              v-model="form.name"
-              placeholder="英文名称，如: python-dev"
-              :disabled="isEdit"
-            />
-          </t-form-item>
-          <t-form-item label="显示名称" name="displayName">
-            <t-input v-model="form.displayName" placeholder="如: Python 开发环境" />
-          </t-form-item>
-          <t-form-item label="描述" name="description">
-            <t-textarea v-model="form.description" placeholder="模板描述" :maxlength="200" />
-          </t-form-item>
-          <t-form-item label="标签" name="tags">
-            <t-tag-input v-model="form.tags" placeholder="按回车添加标签" clearable />
-          </t-form-item>
-          <t-form-item label="镜像" name="spec.image">
-            <t-input v-model="form.spec.image" placeholder="如: python:3.11-slim" />
-          </t-form-item>
-          <t-divider>容器入口 (Command / Args)</t-divider>
-          <t-form-item label="Command">
-            <t-tag-input
-              v-model="form.spec.command"
-              placeholder="留空使用镜像默认；每项回车添加"
-              clearable
-            />
-            <t-tooltip content="覆盖容器入口命令；不填则使用镜像 OCI CMD">
-              <t-icon
-                name="help-circle"
-                style="margin-left: 8px; color: var(--td-text-color-placeholder)"
-              />
-            </t-tooltip>
-          </t-form-item>
-          <t-form-item label="Args">
-            <t-tag-input
-              v-model="form.spec.args"
-              placeholder="留空使用镜像默认；每项回车添加"
-              clearable
-            />
-            <t-tooltip content="覆盖容器参数；不填则使用镜像默认">
-              <t-icon
-                name="help-circle"
-                style="margin-left: 8px; color: var(--td-text-color-placeholder)"
-              />
-            </t-tooltip>
-          </t-form-item>
-          <t-divider>资源配置</t-divider>
-          <t-form-item label="CPU">
-            <t-input v-model="form.spec.resources.cpu" placeholder="如: 500m" />
-          </t-form-item>
-          <t-form-item label="内存">
-            <t-input v-model="form.spec.resources.memory" placeholder="如: 512Mi" />
-          </t-form-item>
-          <t-form-item label="TTL (秒)">
-            <t-input-number v-model="form.spec.ttl" :min="60" :max="86400" />
-          </t-form-item>
-          <t-form-item label="环境变量">
-            <t-textarea
-              v-model="envText"
-              placeholder="KEY=value&#10;KEY2=value2"
-              :autosize="{ minRows: 2, maxRows: 4 }"
-            />
-          </t-form-item>
-          <t-form-item label="启动脚本">
-            <t-textarea
-              v-model="form.spec.startupScript"
-              placeholder="容器启动后执行的 Shell 脚本"
-              :autosize="{ minRows: 3, maxRows: 8 }"
-            />
-          </t-form-item>
-          <t-form-item label="启动超时(秒)">
-            <t-input-number v-model="form.spec.startupTimeout" :min="30" :max="600" />
-          </t-form-item>
-          <t-form-item label="自动预拉取">
-            <t-switch v-model="form.autoPrepull" />
-          </t-form-item>
-          <t-form-item label="允许公网访问">
-            <t-switch v-model="networkAllowInternet" />
-            <t-tooltip content="开启后，允许沙箱出站访问公网（80/443 端口）">
-              <t-icon
-                name="help-circle"
-                style="margin-left: 8px; color: var(--td-text-color-placeholder)"
-              />
-            </t-tooltip>
-          </t-form-item>
-          <t-form-item>
-            <template #label>
-              <span>域名白名单</span>
-              <t-tooltip content="仅允许访问白名单域名（需要开启公网访问才能生效）">
-                <t-icon
-                  name="help-circle"
-                  style="margin-left: 8px; color: var(--td-text-color-placeholder)"
+      <t-form
+        :data="form"
+        :rules="formRules"
+        ref="formRef"
+        label-width="100px"
+        class="template-form"
+      >
+        <t-tabs v-model="dialogTab" theme="card">
+          <t-tab-panel value="basic" label="基本信息">
+            <div class="dialog-tab-content">
+              <t-form-item label="名称" name="name">
+                <t-input
+                  v-model="form.name"
+                  placeholder="英文名称，如: python-dev"
+                  :disabled="isEdit"
                 />
-              </t-tooltip>
-            </template>
-            <div class="domain-whitelist-field">
-              <t-tag-input
-                v-model="networkAllowedDomains"
-                placeholder="如: example.com 或 *.example.com"
-                clearable
-                style="margin-bottom: 0"
-              />
-              <p
-                v-if="!networkAllowInternet && networkAllowedDomains.length > 0"
-                class="domain-whitelist-hint"
-              >
-                公网访问已关闭，暂不生效
-              </p>
+              </t-form-item>
+              <t-form-item label="显示名称" name="displayName">
+                <t-input v-model="form.displayName" placeholder="如: Python 开发环境" />
+              </t-form-item>
+              <t-form-item label="描述" name="description">
+                <t-textarea v-model="form.description" placeholder="模板描述" :maxlength="200" />
+              </t-form-item>
+              <t-form-item label="标签" name="tags">
+                <t-tag-input v-model="form.tags" placeholder="按回车添加标签" clearable />
+              </t-form-item>
             </div>
-          </t-form-item>
-        </t-form>
-      </div>
+          </t-tab-panel>
+
+          <t-tab-panel value="image" label="镜像配置">
+            <div class="dialog-tab-content">
+              <t-form-item label="镜像" name="spec.image">
+                <t-input v-model="form.spec.image" placeholder="如: python:3.11-slim" />
+              </t-form-item>
+              <t-divider>容器入口</t-divider>
+              <t-form-item label="Command">
+                <t-tag-input v-model="form.spec.command" placeholder="留空使用镜像默认" clearable />
+              </t-form-item>
+              <t-form-item label="Args">
+                <t-tag-input v-model="form.spec.args" placeholder="留空使用镜像默认" clearable />
+              </t-form-item>
+              <t-divider>环境与脚本</t-divider>
+              <t-form-item label="环境变量">
+                <t-textarea
+                  v-model="envText"
+                  placeholder="KEY=value&#10;KEY2=value2"
+                  :autosize="{ minRows: 3, maxRows: 6 }"
+                />
+              </t-form-item>
+              <t-form-item label="启动脚本">
+                <t-textarea
+                  v-model="form.spec.startupScript"
+                  placeholder="容器启动后执行的 Shell 脚本"
+                  :autosize="{ minRows: 3, maxRows: 6 }"
+                />
+              </t-form-item>
+            </div>
+          </t-tab-panel>
+
+          <t-tab-panel value="resource" label="资源与网络">
+            <div class="dialog-tab-content">
+              <t-form-item label="CPU">
+                <t-input v-model="form.spec.resources.cpu" placeholder="如: 500m" />
+              </t-form-item>
+              <t-form-item label="内存">
+                <t-input v-model="form.spec.resources.memory" placeholder="如: 512Mi" />
+              </t-form-item>
+              <t-form-item label="TTL (秒)">
+                <t-input-number v-model="form.spec.ttl" :min="60" :max="86400" />
+              </t-form-item>
+              <t-form-item label="启动超时">
+                <t-input-number
+                  v-model="form.spec.startupTimeout"
+                  :min="30"
+                  :max="600"
+                  suffix="秒"
+                />
+              </t-form-item>
+              <t-divider>高级选项</t-divider>
+              <t-form-item label="自动预拉取">
+                <t-switch v-model="form.autoPrepull" />
+              </t-form-item>
+              <t-form-item label="公网访问">
+                <t-switch v-model="networkAllowInternet" />
+              </t-form-item>
+              <t-form-item v-if="networkAllowInternet" label="域名白名单">
+                <div class="domain-whitelist-field">
+                  <t-tag-input
+                    v-model="networkAllowedDomains"
+                    placeholder="如: *.example.com"
+                    clearable
+                  />
+                </div>
+              </t-form-item>
+            </div>
+          </t-tab-panel>
+        </t-tabs>
+      </t-form>
     </t-dialog>
 
     <!-- Import Dialog -->
@@ -278,6 +262,8 @@ const isEdit = ref(false)
 const editingTemplate = ref<Template | null>(null)
 const formRef = ref()
 const activeTab = ref('all')
+
+const dialogTab = ref('basic')
 
 const form = ref<CreateTemplateRequest & { autoPrepull?: boolean }>({
   name: '',
@@ -644,10 +630,9 @@ onMounted(() => {
   font-size: 12px;
 }
 
-.template-form-scroll {
-  max-height: 70vh;
-  overflow-y: auto;
-  padding-right: 4px;
+.dialog-tab-content {
+  padding: 24px 0;
+  min-height: 400px;
 }
 
 /* 域名白名单：输入框与下方提示纵向排列，提示紧贴输入框 */

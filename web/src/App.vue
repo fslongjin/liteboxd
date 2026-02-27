@@ -9,30 +9,37 @@
         <h1>LiteBoxd</h1>
       </div>
       <div class="nav-links">
-        <t-link
+        <t-button
+          variant="text"
           :class="['nav-link', { active: route.path === '/sandboxes' }]"
-          theme="light"
-          hover="color"
           @click="navigateTo('/sandboxes')"
         >
           Sandboxes
-        </t-link>
-        <t-link
+        </t-button>
+        <t-button
+          variant="text"
           :class="['nav-link', { active: route.path.startsWith('/templates') }]"
-          theme="light"
-          hover="color"
           @click="navigateTo('/templates')"
         >
           模板管理
-        </t-link>
-        <t-link
+        </t-button>
+        <t-button
+          variant="text"
           :class="['nav-link', { active: route.path.startsWith('/metadata') }]"
-          theme="light"
-          hover="color"
           @click="navigateTo('/metadata/sandboxes')"
         >
           元数据记录
-        </t-link>
+        </t-button>
+      </div>
+      <div class="header-right">
+        <t-dropdown :options="userMenuOptions" @click="onUserMenuClick">
+          <t-button variant="text" class="user-btn">
+            {{ username || 'admin' }}
+            <template #suffix>
+              <chevron-down-icon />
+            </template>
+          </t-button>
+        </t-dropdown>
       </div>
     </t-header>
     <t-content class="app-content">
@@ -47,14 +54,45 @@
 </template>
 
 <script setup lang="ts">
+import { ref, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
+import { ChevronDownIcon } from 'tdesign-icons-vue-next'
+import { authApi } from './api/auth'
 
 const router = useRouter()
 const route = useRoute()
+const username = ref('')
+
+const userMenuOptions = [
+  { content: 'API Keys', value: 'api-keys' },
+  { content: '登出', value: 'logout' },
+]
 
 const navigateTo = (path: string) => {
   router.push(path)
 }
+
+const onUserMenuClick = async (data: { value: string }) => {
+  if (data.value === 'api-keys') {
+    router.push('/settings/api-keys')
+  } else if (data.value === 'logout') {
+    try {
+      await authApi.logout()
+    } catch {
+      // ignore
+    }
+    router.push('/login')
+  }
+}
+
+onMounted(async () => {
+  try {
+    const res = await authApi.me()
+    username.value = res.data.username || ''
+  } catch {
+    // Not logged in — router guard will handle redirect
+  }
+})
 </script>
 
 <style>
@@ -84,26 +122,37 @@ body {
 .nav-links {
   display: flex;
   gap: 24px;
+  flex: 1;
 }
 
 .nav-link {
-  color: rgba(255, 255, 255, 0.8);
+  color: rgba(255, 255, 255, 0.8) !important;
   font-size: 14px;
-  cursor: pointer;
-  text-decoration: none;
-  padding: 8px 12px;
   border-radius: 4px;
   transition: all 0.2s;
 }
 
 .nav-link:hover {
-  background: rgba(255, 255, 255, 0.15);
-  color: white;
+  background: rgba(255, 255, 255, 0.15) !important;
+  color: white !important;
 }
 
 .nav-link.active {
-  background: rgba(255, 255, 255, 0.2);
-  color: white;
+  background: rgba(255, 255, 255, 0.2) !important;
+  color: white !important;
+}
+
+.header-right {
+  margin-left: auto;
+}
+
+.user-btn {
+  color: rgba(255, 255, 255, 0.9) !important;
+}
+
+.user-btn:hover {
+  color: white !important;
+  background: rgba(255, 255, 255, 0.15) !important;
 }
 
 .app-content {

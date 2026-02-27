@@ -1,8 +1,15 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import { authApi } from '../api/auth'
 
 const router = createRouter({
   history: createWebHistory(),
   routes: [
+    {
+      path: '/login',
+      name: 'login',
+      component: () => import('../views/Login.vue'),
+      meta: { public: true, hideLayout: true },
+    },
     {
       path: '/',
       name: 'home',
@@ -49,7 +56,26 @@ const router = createRouter({
       name: 'metadata-reconcile',
       component: () => import('../views/MetadataReconcile.vue'),
     },
+    {
+      path: '/settings/api-keys',
+      name: 'api-keys',
+      component: () => import('../views/APIKeys.vue'),
+    },
   ],
+})
+
+// Navigation guard: redirect to login if not authenticated
+router.beforeEach(async (to, _from, next) => {
+  if (to.meta.public) {
+    next()
+    return
+  }
+  try {
+    await authApi.me()
+    next()
+  } catch {
+    next({ name: 'login', query: { redirect: to.fullPath } })
+  }
 })
 
 export default router

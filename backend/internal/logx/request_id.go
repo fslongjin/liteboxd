@@ -2,6 +2,7 @@ package logx
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 
 	"github.com/gin-gonic/gin"
@@ -56,4 +57,30 @@ func LoggerWithRequestID(ctx context.Context) *slog.Logger {
 		return slog.Default()
 	}
 	return slog.Default().With("request_id", requestID)
+}
+
+// Logger wraps *slog.Logger with fmt.Sprintf-style convenience methods.
+type Logger struct {
+	*slog.Logger
+}
+
+func (l *Logger) Infof(format string, args ...any) {
+	l.Info(fmt.Sprintf(format, args...))
+}
+
+func (l *Logger) Warnf(format string, args ...any) {
+	l.Warn(fmt.Sprintf(format, args...))
+}
+
+func (l *Logger) Errorf(format string, args ...any) {
+	l.Error(fmt.Sprintf(format, args...))
+}
+
+func (l *Logger) Debugf(format string, args ...any) {
+	l.Debug(fmt.Sprintf(format, args...))
+}
+
+// WithComponent returns a Logger with request_id (from context) and the given component name.
+func WithComponent(ctx context.Context, component string) *Logger {
+	return &Logger{LoggerWithRequestID(ctx).With("component", component)}
 }

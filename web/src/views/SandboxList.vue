@@ -2,7 +2,10 @@
   <div class="sandbox-list">
     <t-card title="Sandboxes" :bordered="false">
       <template #actions>
-        <t-button theme="primary" @click="showTemplateSelect = true"> 创建沙箱 </t-button>
+        <t-button theme="primary" @click="showTemplateSelect = true">
+          <template #icon><add-icon /></template>
+          创建沙箱
+        </t-button>
       </template>
 
       <t-table :data="sandboxes" :columns="columns" :loading="loading" row-key="id" hover>
@@ -121,7 +124,7 @@
 import { ref, watch, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { MessagePlugin } from 'tdesign-vue-next'
-import { SearchIcon } from 'tdesign-icons-vue-next'
+import { SearchIcon, AddIcon } from 'tdesign-icons-vue-next'
 import { debounce } from 'lodash-es'
 import { sandboxApi, type Sandbox, type CreateSandboxRequest } from '../api/sandbox'
 import { templateApi, type Template } from '../api/template'
@@ -371,24 +374,30 @@ onUnmounted(() => {
 }
 
 .template-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 16px;
+  padding: 4px;
 }
 
 .template-item {
   display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 12px;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 16px;
   border: 1px solid var(--td-component-border);
-  border-radius: 8px;
+  border-radius: 12px;
   cursor: pointer;
-  transition: background-color 0.2s;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  background: var(--td-bg-color-container);
+  position: relative;
+  overflow: hidden;
 }
 
 .template-item:hover {
-  background: var(--td-bg-color-container-hover);
+  border-color: var(--td-brand-color);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 16px -4px rgba(0, 0, 0, 0.05);
 }
 
 .template-item.is-selected {
@@ -396,35 +405,54 @@ onUnmounted(() => {
   border-color: var(--td-brand-color);
 }
 
+.template-item.is-selected::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 0;
+  height: 0;
+  border-style: solid;
+  border-width: 0 24px 24px 0;
+  border-color: transparent var(--td-brand-color) transparent transparent;
+}
+
 .template-icon {
-  width: 40px;
-  height: 40px;
-  border-radius: 8px;
-  background: var(--td-brand-color);
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, var(--td-brand-color) 0%, #266eff 100%);
   color: white;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-weight: bold;
-  font-size: 18px;
+  font-weight: 600;
+  font-size: 20px;
   flex-shrink: 0;
+  box-shadow: 0 4px 6px -1px rgba(0, 82, 217, 0.2);
 }
 
 .template-info {
   flex: 1;
   min-width: 0;
+  padding-top: 2px;
 }
 
 .template-name {
-  font-weight: 500;
-  margin-bottom: 4px;
+  font-weight: 600;
+  font-size: 16px;
+  margin-bottom: 6px;
+  color: var(--td-text-color-primary);
 }
 
 .template-desc {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--td-text-color-secondary);
-  white-space: nowrap;
+  line-height: 1.5;
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
   overflow: hidden;
-  text-overflow: ellipsis;
 }
 </style>

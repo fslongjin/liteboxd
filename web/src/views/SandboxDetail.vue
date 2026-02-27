@@ -2,15 +2,15 @@
   <div class="sandbox-detail">
     <t-card :bordered="false">
       <template #title>
-        <t-space align="center">
-          <t-link @click="$router.push('/sandboxes')">
-            <t-icon name="chevron-left" />
-          </t-link>
-          <span>Sandbox: {{ sandbox?.id }}</span>
-          <t-tag :theme="getStatusTheme(sandbox?.status || '')">
+        <div class="header-title">
+          <t-button variant="text" shape="square" @click="$router.push('/sandboxes')">
+            <template #icon><t-icon name="arrow-left" /></template>
+          </t-button>
+          <span class="title-text">Sandbox: {{ sandbox?.id }}</span>
+          <t-tag :theme="getStatusTheme(sandbox?.status || '')" variant="light-outline">
             {{ getStatusText(sandbox?.status || '') }}
           </t-tag>
-        </t-space>
+        </div>
       </template>
       <template #actions>
         <t-space>
@@ -360,31 +360,53 @@ onUnmounted(() => {
 }
 
 .log-title {
-  padding: 8px 12px;
-  background: var(--td-bg-color-container-hover);
+  padding: 12px 16px;
+  background: var(--td-bg-color-secondarycontainer);
   border-bottom: 1px solid var(--td-component-border);
-  font-weight: 500;
+  font-weight: 600;
+  font-size: 13px;
+  border-radius: 8px 8px 0 0;
+  color: var(--td-text-color-primary);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.header-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.title-text {
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
 }
 
 .log-content {
   margin: 0;
-  padding: 12px;
-  min-height: 150px;
-  max-height: 300px;
+  padding: 16px;
+  min-height: 200px;
+  max-height: 400px;
   overflow: auto;
-  font-family: monospace;
-  font-size: 12px;
+  font-family: 'Fira Code', 'JetBrains Mono', Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-all;
-  background: var(--td-bg-color-container);
+  background: #1e1e1e; /* Dark theme for logs */
+  color: #d4d4d4;
+  border-radius: 0 0 8px 8px;
 }
 
 .event-list {
   padding: 12px;
-  min-height: 150px;
-  max-height: 300px;
+  min-height: 200px;
+  max-height: 400px;
   overflow: auto;
   background: var(--td-bg-color-container);
+  border-radius: 0 0 8px 8px;
 }
 
 .event-item {
@@ -413,21 +435,28 @@ onUnmounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 8px 12px;
-  background: var(--td-bg-color-container-hover);
-  border-bottom: 1px solid var(--td-component-border);
+  padding: 8px 16px;
+  background: #0f172a; /* Dark header */
+  color: #e2e8f0;
+  border-radius: 8px 8px 0 0;
+  border-bottom: 1px solid #334155;
+  font-family: 'Fira Code', monospace;
+  font-size: 12px;
 }
 
 .output-content {
   margin: 0;
-  padding: 12px;
+  padding: 16px;
   min-height: 200px;
   max-height: 400px;
   overflow: auto;
-  font-family: monospace;
+  font-family: 'Fira Code', 'JetBrains Mono', Consolas, monospace;
   font-size: 13px;
+  line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-all;
-  background: var(--td-bg-color-container);
+  background: #0f172a; /* Terminal background */
+  color: #4ade80; /* Matrix Green */
+  border-radius: 0 0 8px 8px;
 }
 </style>

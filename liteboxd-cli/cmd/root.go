@@ -88,10 +88,14 @@ func getAPIClient() *liteboxd.Client {
 		timeout = 30 * time.Second
 	}
 
-	return liteboxd.NewClient(
-		url,
-		liteboxd.WithTimeout(timeout),
-	)
+	opts := []liteboxd.Option{liteboxd.WithTimeout(timeout)}
+
+	token := viper.GetString("token")
+	if token != "" {
+		opts = append(opts, liteboxd.WithAuthToken(token))
+	}
+
+	return liteboxd.NewClient(url, opts...)
 }
 
 // getContext returns a context with timeout

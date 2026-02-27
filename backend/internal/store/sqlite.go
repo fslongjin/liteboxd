@@ -238,5 +238,65 @@ func createTables() error {
 		return fmt.Errorf("failed to create sandbox reconcile items index: %w", err)
 	}
 
+	// Create admin_users table
+	_, err = DB.Exec(`
+		CREATE TABLE IF NOT EXISTS admin_users (
+			id TEXT PRIMARY KEY,
+			username TEXT NOT NULL UNIQUE,
+			password_hash TEXT NOT NULL,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+		)
+	`)
+	if err != nil {
+		return fmt.Errorf("failed to create admin_users table: %w", err)
+	}
+
+	// Create sessions table
+	_, err = DB.Exec(`
+		CREATE TABLE IF NOT EXISTS sessions (
+			id TEXT PRIMARY KEY,
+			user_id TEXT NOT NULL,
+			expires_at TIMESTAMP NOT NULL,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (user_id) REFERENCES admin_users(id) ON DELETE CASCADE
+		)
+	`)
+	if err != nil {
+		return fmt.Errorf("failed to create sessions table: %w", err)
+	}
+	if _, err := DB.Exec("CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at)"); err != nil {
+		return fmt.Errorf("failed to create sessions index: %w", err)
+	}
+
+	// Create api_keys table
+	_, err = DB.Exec(`
+		CREATE TABLE IF NOT EXISTS api_keys (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			prefix TEXT NOT NULL,
+			key_hash TEXT NOT NULL,
+			expires_at TIMESTAMP,
+			last_used_at TIMESTAMP,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+		)
+	`)
+	if err != nil {
+		return fmt.Errorf("failed to create api_keys table: %w", err)
+	}
+	// Drop existing non-unique index to replace with UNIQUE index (idempotent migration)
+	if _, err := DB.Exec("DROP INDEX IF EXISTS idx_api_keys_key_hash"); err != nil {
+		return fmt.Errorf("failed to drop old api_keys index: %w", err)
+	}
+	apiKeyIndexes := []string{
+		"CREATE UNIQUE INDEX IF NOT EXISTS idx_api_keys_key_hash ON api_keys(key_hash)",
+		"CREATE INDEX IF NOT EXISTS idx_api_keys_prefix ON api_keys(prefix)",
+	}
+	for _, idx := range apiKeyIndexes {
+		if _, err := DB.Exec(idx); err != nil {
+			return fmt.Errorf("failed to create api_keys index: %w", err)
+		}
+	}
+
 	return nil
 }

@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/fslongjin/liteboxd/backend/internal/auth"
 	"github.com/fslongjin/liteboxd/backend/internal/handler"
 	"github.com/fslongjin/liteboxd/backend/internal/k8s"
 	"github.com/fslongjin/liteboxd/backend/internal/lifecycle"
@@ -51,6 +52,43 @@ func main() {
 	}
 	defer store.CloseDB()
 	slog.Info("database initialized", "component", "store")
+
+	// Initialize auth: ensure admin user exists
+	authStore := store.NewAuthStore()
+	if err := auth.EnsureAdmin(context.Background(), authStore); err != nil {
+		log.Fatalf("Failed to ensure admin user: %v", err)
+	}
+
+	// Parse session max age
+	sessionMaxAge := 24 * time.Hour
+	if v := os.Getenv("SESSION_MAX_AGE"); v != "" {
+		if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 {
+			sessionMaxAge = time.Duration(parsed) * time.Second
+		} else {
+			slog.Warn("invalid SESSION_MAX_AGE, fallback to default", "value", v)
+		}
+	}
+
+	// Start session cleanup goroutine
+	sessionCleanupCtx, sessionCleanupCancel := context.WithCancel(context.Background())
+	go func() {
+		ticker := time.NewTicker(1 * time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				deleted, err := authStore.DeleteExpiredSessions(sessionCleanupCtx, time.Now())
+				if err != nil {
+					slog.Warn("failed to clean expired sessions", "error", err)
+				} else if deleted > 0 {
+					slog.Info("cleaned expired sessions", "count", deleted)
+				}
+			case <-sessionCleanupCtx.Done():
+				slog.Info("session cleanup goroutine stopped")
+				return
+			}
+		}
+	}()
 
 	kubeconfigPath := os.Getenv("KUBECONFIG")
 	sandboxNamespace := os.Getenv("SANDBOX_NAMESPACE")
@@ -137,6 +175,7 @@ func main() {
 	drainState := lifecycle.NewDrainManager()
 
 	// Create handlers
+	authHandler := handler.NewAuthHandler(authStore, sessionMaxAge, nil)
 	sandboxHandler := handler.NewSandboxHandler(sandboxSvc, reconcileSvc, drainState)
 	templateHandler := handler.NewTemplateHandler(templateSvc)
 	prepullHandler := handler.NewPrepullHandler(prepullSvc, templateSvc)
@@ -148,9 +187,11 @@ func main() {
 	r.Use(logx.AccessLogMiddleware("api_http"))
 
 	r.Use(cors.New(cors.Config{
-		AllowOrigins:     []string{"*"},
+		AllowOriginFunc: func(origin string) bool {
+			return true // Allow all origins; cookie SameSite provides CSRF protection
+		},
 		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-		AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Upgrade", "Connection", "Sec-WebSocket-Key", "Sec-WebSocket-Version", "Sec-WebSocket-Extensions", "Sec-WebSocket-Protocol"},
+		AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization", "Upgrade", "Connection", "Sec-WebSocket-Key", "Sec-WebSocket-Version", "Sec-WebSocket-Extensions", "Sec-WebSocket-Protocol"},
 		ExposeHeaders:    []string{"Content-Length"},
 		AllowCredentials: true,
 		MaxAge:           12 * time.Hour,
@@ -174,7 +215,16 @@ func main() {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
 
+	// Auth middleware
+	authMiddleware := auth.AuthMiddleware(authStore)
+
+	// Auth routes (login is public, rest require auth)
+	authGroup := r.Group("/api/v1/auth")
+	authHandler.RegisterRoutes(authGroup, authMiddleware)
+
+	// Protected API routes
 	api := r.Group("/api/v1")
+	api.Use(authMiddleware)
 	sandboxHandler.RegisterRoutes(api)
 	templateHandler.RegisterRoutes(api)
 	prepullHandler.RegisterRoutes(api)
@@ -211,6 +261,8 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 	log.Println("Shutting down API server...")
+
+	sessionCleanupCancel()
 
 	drainState.StartDraining()
 	time.Sleep(2 * time.Second)

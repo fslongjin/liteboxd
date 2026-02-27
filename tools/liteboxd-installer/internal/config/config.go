@@ -73,15 +73,15 @@ type CiliumConfig struct {
 }
 
 type LiteBoxdConfig struct {
-	NamespaceSystem    string         `yaml:"namespaceSystem"`
-	NamespaceSandbox   string         `yaml:"namespaceSandbox"`
-	IngressHost        string         `yaml:"ingressHost"`
-	GatewayIngressHost string         `yaml:"gatewayIngressHost"`
-	GatewayURL         string         `yaml:"gatewayURL"`
+	NamespaceSystem        string         `yaml:"namespaceSystem"`
+	NamespaceSandbox       string         `yaml:"namespaceSandbox"`
+	IngressHost            string         `yaml:"ingressHost"`
+	GatewayIngressHost     string         `yaml:"gatewayIngressHost"`
+	GatewayURL             string         `yaml:"gatewayURL"`
 	MetadataRetentionDays  int            `yaml:"metadataRetentionDays"`
-	Security           SecurityConfig `yaml:"security"`
-	ConfigDir          string         `yaml:"configDir"`
-	Images             ImageConfig    `yaml:"images"`
+	Security               SecurityConfig `yaml:"security"`
+	ConfigDir              string         `yaml:"configDir"`
+	Images                 ImageConfig    `yaml:"images"`
 	DeploySandboxResources *bool          `yaml:"deploySandboxResources"`
 }
 
