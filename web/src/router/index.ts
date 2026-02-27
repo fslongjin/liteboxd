@@ -61,6 +61,11 @@ const router = createRouter({
       name: 'api-keys',
       component: () => import('../views/APIKeys.vue'),
     },
+    {
+      path: '/settings/change-password',
+      name: 'change-password',
+      component: () => import('../views/ChangePassword.vue'),
+    },
   ],
 })
 

@@ -50,6 +50,7 @@ func (h *AuthHandler) RegisterRoutes(group *gin.RouterGroup, authMiddleware gin.
 		sessionOnly.Use(auth.SessionOnlyMiddleware())
 		{
 			sessionOnly.POST("/logout", h.Logout)
+			sessionOnly.POST("/change-password", h.ChangePassword)
 			sessionOnly.POST("/api-keys", h.CreateAPIKey)
 			sessionOnly.GET("/api-keys", h.ListAPIKeys)
 			sessionOnly.DELETE("/api-keys/:id", h.DeleteAPIKey)
@@ -133,6 +134,63 @@ func (h *AuthHandler) Logout(c *gin.Context) {
 	h.logger(c).Info("session logged out")
 
 	c.JSON(http.StatusOK, gin.H{"message": "logout successful"})
+}
+
+type changePasswordRequest struct {
+	OldPassword string `json:"old_password" binding:"required"`
+	NewPassword string `json:"new_password" binding:"required,min=8"`
+}
+
+// ChangePassword updates the current user's password.
+func (h *AuthHandler) ChangePassword(c *gin.Context) {
+	var req changePasswordRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request: " + err.Error()})
+		return
+	}
+
+	userID, exists := c.Get(auth.ContextKeyUserID)
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	admin, err := h.authStore.GetAdminByID(c.Request.Context(), userID.(string))
+	if err != nil {
+		h.logger(c).Errorf("failed to get admin by id: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+		return
+	}
+	if admin == nil {
+		h.logger(c).Warnf("admin user not found for id: %s", userID)
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "user not found"})
+		return
+	}
+
+	// Verify old password
+	if err := bcrypt.CompareHashAndPassword([]byte(admin.PasswordHash), []byte(req.OldPassword)); err != nil {
+		h.logger(c).Warnf("password change failed: invalid old password for user %s", admin.Username)
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid old password"})
+		return
+	}
+
+	// Hash new password
+	hash, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcrypt.DefaultCost)
+	if err != nil {
+		h.logger(c).Errorf("failed to hash new password for user %s: %v", admin.Username, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to hash password"})
+		return
+	}
+
+	// Update password
+	if err := h.authStore.UpdateAdminPassword(c.Request.Context(), admin.ID, string(hash)); err != nil {
+		h.logger(c).Errorf("failed to update password in store for user %s: %v", admin.Username, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update password"})
+		return
+	}
+
+	h.logger(c).Infof("password updated for user %s", admin.Username)
+	c.JSON(http.StatusOK, gin.H{"message": "password updated successfully"})
 }
 
 // Me returns current authentication information.
