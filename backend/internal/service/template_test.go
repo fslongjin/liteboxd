@@ -88,3 +88,62 @@ func TestValidateNetworkSpecDisabled(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func TestValidatePersistenceSpecValid(t *testing.T) {
+	spec := &model.PersistenceSpec{
+		Enabled:          true,
+		Mode:             model.PersistenceModeRootFSOverlay,
+		Size:             "1Gi",
+		StorageClassName: "longhorn",
+		ReclaimPolicy:    model.PersistenceReclaimDelete,
+	}
+	if err := validatePersistenceSpec(spec); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidatePersistenceSpecDefaultSize(t *testing.T) {
+	spec := &model.PersistenceSpec{
+		Enabled:          true,
+		Mode:             model.PersistenceModeRootFSOverlay,
+		StorageClassName: "longhorn",
+	}
+	if err := validatePersistenceSpec(spec); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if spec.Size != model.PersistenceDefaultSize {
+		t.Fatalf("expected default size %q, got %q", model.PersistenceDefaultSize, spec.Size)
+	}
+}
+
+func TestValidatePersistenceSpecRejectsLocalPath(t *testing.T) {
+	spec := &model.PersistenceSpec{
+		Enabled:          true,
+		Mode:             model.PersistenceModeRootFSOverlay,
+		Size:             "1Gi",
+		StorageClassName: "local-path",
+	}
+	if err := validatePersistenceSpec(spec); err == nil {
+		t.Fatalf("expected local-path to be rejected")
+	}
+}
+
+func TestValidateSpecPersistentTemplateWithoutCommand(t *testing.T) {
+	spec := &model.TemplateSpec{
+		Image: "alpine:3.20",
+		Resources: model.ResourceSpec{
+			CPU:    "500m",
+			Memory: "512Mi",
+		},
+		TTL: 0,
+		Persistence: &model.PersistenceSpec{
+			Enabled:          true,
+			Mode:             model.PersistenceModeRootFSOverlay,
+			Size:             "1Gi",
+			StorageClassName: "longhorn",
+		},
+	}
+	if err := validateSpec(spec); err != nil {
+		t.Fatalf("expected validateSpec success for persistent template without command, got: %v", err)
+	}
+}

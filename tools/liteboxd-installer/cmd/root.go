@@ -17,7 +17,7 @@ var (
 var rootCmd = &cobra.Command{
 	Use:   "liteboxd-installer",
 	Short: "LiteBoxd one-click cluster installer",
-	Long:  "Install K3s + Cilium and deploy LiteBoxd to remote hosts via SSH.",
+	Long:  "Install K3s + Cilium (+ optional Longhorn) and deploy LiteBoxd to remote hosts via SSH.",
 }
 
 func Execute(version, commit, date string) error {

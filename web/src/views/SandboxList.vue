@@ -30,12 +30,26 @@
         <template #created_at="{ row }">
           {{ formatTime(row.created_at) }}
         </template>
+        <template #ttl="{ row }">
+          {{ formatTTL(row.ttl) }}
+        </template>
+        <template #persistence="{ row }">
+          {{ formatSandboxPersistence(row) }}
+        </template>
         <template #expires_at="{ row }">
-          {{ formatTime(row.expires_at) }}
+          {{ row.ttl === 0 ? '永久' : formatTime(row.expires_at) }}
         </template>
         <template #operation="{ row }">
           <t-space>
             <t-link theme="primary" @click="goToDetail(row.id)">详情</t-link>
+            <t-popconfirm
+              v-if="canRestartSandbox(row)"
+              content="确定要重启该持久化 Sandbox 吗？"
+              @confirm="restartSandbox(row.id)"
+            >
+              <t-link theme="warning">重启</t-link>
+            </t-popconfirm>
+            <span v-else class="op-disabled">重启</span>
             <t-popconfirm content="确定要删除该 Sandbox 吗？" @confirm="deleteSandbox(row.id)">
               <t-link theme="danger">删除</t-link>
             </t-popconfirm>
@@ -106,6 +120,9 @@
       <t-divider />
 
       <t-form v-if="selectedTemplate" :data="templateOverrides" label-width="80px">
+        <t-form-item label="持久化">
+          <span class="template-desc-inline">{{ selectedTemplatePersistenceLabel || '关闭' }}</span>
+        </t-form-item>
         <t-form-item label="覆盖 CPU">
           <t-input v-model="templateOverrides.cpu" placeholder="留空使用模板默认值" />
         </t-form-item>
@@ -113,7 +130,13 @@
           <t-input v-model="templateOverrides.memory" placeholder="留空使用模板默认值" />
         </t-form-item>
         <t-form-item label="覆盖 TTL">
-          <t-input-number v-model="templateOverrides.ttl" :min="60" :max="86400" />
+          <t-input-number v-model="templateOverrides.ttl" :min="0" :max="86400" />
+        </t-form-item>
+        <t-form-item v-if="selectedTemplateHasPersistence" label="覆盖磁盘">
+          <t-input
+            v-model="templateOverrides.persistenceSize"
+            placeholder="如: 40Gi（留空使用模板默认值）"
+          />
         </t-form-item>
       </t-form>
     </t-dialog>
@@ -121,7 +144,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, onMounted, onUnmounted } from 'vue'
+import { computed, ref, watch, onMounted, onUnmounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { MessagePlugin } from 'tdesign-vue-next'
 import { SearchIcon, AddIcon } from 'tdesign-icons-vue-next'
@@ -143,7 +166,8 @@ const templatesLoading = ref(false)
 const templateOverrides = ref({
   cpu: '',
   memory: '',
-  ttl: 0,
+  ttl: null as number | null,
+  persistenceSize: '',
 })
 
 const columns = [
@@ -151,10 +175,12 @@ const columns = [
   { colKey: 'image', title: '镜像', ellipsis: true },
   { colKey: 'cpu', title: 'CPU', width: 100 },
   { colKey: 'memory', title: '内存', width: 100 },
+  { colKey: 'ttl', title: 'TTL', width: 90 },
+  { colKey: 'persistence', title: '持久化', ellipsis: true },
   { colKey: 'status', title: '状态', width: 100 },
   { colKey: 'created_at', title: '创建时间', width: 180 },
   { colKey: 'expires_at', title: '过期时间', width: 180 },
-  { colKey: 'operation', title: '操作', width: 120 },
+  { colKey: 'operation', title: '操作', width: 180 },
 ]
 
 const filteredTemplates = ref<Template[]>([])
@@ -195,6 +221,43 @@ const formatTime = (time: string) => {
   if (!time) return '-'
   return new Date(time).toLocaleString()
 }
+
+const formatTTL = (ttl?: number) => {
+  if (ttl === 0) return '永久'
+  if (!ttl) return '-'
+  return `${ttl}s`
+}
+
+const formatSandboxPersistence = (sb: Sandbox) => {
+  const p = sb.persistence
+  if (!p || !p.enabled) return '关闭'
+  const mode = p.mode || 'rootfs-overlay'
+  const size = p.size || '-'
+  const sc = p.storageClassName || '-'
+  return `${mode} / ${size} / ${sc}`
+}
+
+const selectedTemplateObj = computed(() => {
+  if (!selectedTemplate.value) return null
+  return (
+    filteredTemplates.value.find((t) => t.name === selectedTemplate.value) ||
+    templates.value.find((t) => t.name === selectedTemplate.value) ||
+    null
+  )
+})
+
+const selectedTemplateHasPersistence = computed(
+  () => selectedTemplateObj.value?.spec?.persistence?.enabled === true
+)
+
+const selectedTemplatePersistenceLabel = computed(() => {
+  const p = selectedTemplateObj.value?.spec?.persistence
+  if (!p || !p.enabled) return ''
+  const mode = p.mode || 'rootfs-overlay'
+  const size = p.size || '-'
+  const sc = p.storageClassName || '-'
+  return `${mode} / ${size} / ${sc}`
+})
 
 const loadSandboxes = async () => {
   loading.value = true
@@ -271,15 +334,23 @@ const createFromTemplate = async () => {
     if (templateOverrides.value.memory) {
       data.overrides = { ...data.overrides, memory: templateOverrides.value.memory }
     }
-    if (templateOverrides.value.ttl > 0) {
+    if (templateOverrides.value.ttl !== null) {
       data.overrides = { ...data.overrides, ttl: templateOverrides.value.ttl }
+    }
+    if (selectedTemplateHasPersistence.value && templateOverrides.value.persistenceSize.trim()) {
+      data.overrides = {
+        ...data.overrides,
+        persistence: {
+          size: templateOverrides.value.persistenceSize.trim(),
+        },
+      }
     }
 
     await sandboxApi.create(data)
     MessagePlugin.success('创建成功')
     showTemplateSelect.value = false
     selectedTemplate.value = ''
-    templateOverrides.value = { cpu: '', memory: '', ttl: 0 }
+    templateOverrides.value = { cpu: '', memory: '', ttl: null, persistenceSize: '' }
     loadSandboxes()
   } catch (err: any) {
     MessagePlugin.error('创建失败: ' + (err.response?.data?.error || err.message))
@@ -298,6 +369,18 @@ const deleteSandbox = async (id: string) => {
   }
 }
 
+const canRestartSandbox = (sb: Sandbox) => sb.persistence?.enabled === true
+
+const restartSandbox = async (id: string) => {
+  try {
+    await sandboxApi.restart(id)
+    MessagePlugin.success('已触发重启')
+    loadSandboxes()
+  } catch (err: any) {
+    MessagePlugin.error('重启失败: ' + (err.response?.data?.error || err.message))
+  }
+}
+
 const goToDetail = (id: string) => {
   router.push(`/sandboxes/${id}`)
 }
@@ -309,6 +392,7 @@ const goToTemplates = () => {
 
 const selectTemplate = (name: string) => {
   selectedTemplate.value = name
+  templateOverrides.value.persistenceSize = ''
 }
 
 const onSearchEnter = () => {
@@ -383,6 +467,10 @@ onUnmounted(() => {
 .image-text {
   font-family: monospace;
   font-size: 12px;
+}
+
+.op-disabled {
+  color: var(--td-text-color-disabled);
 }
 
 .template-list {
@@ -466,5 +554,10 @@ onUnmounted(() => {
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
+}
+
+.template-desc-inline {
+  color: var(--td-text-color-secondary);
+  font-size: 13px;
 }
 </style>

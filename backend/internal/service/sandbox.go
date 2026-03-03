@@ -20,6 +20,7 @@ import (
 	"github.com/gorilla/websocket"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 )
 
 type SandboxService struct {
@@ -75,6 +76,11 @@ func (s *SandboxService) Create(ctx context.Context, req *model.CreateSandboxReq
 	memory := spec.Resources.Memory
 	ttl := spec.TTL
 	env := spec.Env
+	var persistence *model.PersistenceSpec
+	if spec.Persistence != nil {
+		cp := *spec.Persistence
+		persistence = &cp
+	}
 
 	startupScript := spec.StartupScript
 	startupFiles := spec.Files
@@ -95,8 +101,8 @@ func (s *SandboxService) Create(ctx context.Context, req *model.CreateSandboxReq
 		if req.Overrides.Memory != "" {
 			memory = req.Overrides.Memory
 		}
-		if req.Overrides.TTL > 0 {
-			ttl = req.Overrides.TTL
+		if req.Overrides.TTL != nil {
+			ttl = *req.Overrides.TTL
 		}
 		if req.Overrides.Env != nil {
 			if env == nil {
@@ -104,6 +110,17 @@ func (s *SandboxService) Create(ctx context.Context, req *model.CreateSandboxReq
 			}
 			for k, v := range req.Overrides.Env {
 				env[k] = v
+			}
+		}
+		if req.Overrides.Persistence != nil {
+			if persistence == nil || !persistence.Enabled {
+				return nil, fmt.Errorf("persistence overrides are not allowed when template persistence is disabled")
+			}
+			if req.Overrides.Persistence.Size != "" {
+				if _, err := resource.ParseQuantity(req.Overrides.Persistence.Size); err != nil {
+					return nil, fmt.Errorf("invalid overrides.persistence.size: %w", err)
+				}
+				persistence.Size = req.Overrides.Persistence.Size
 			}
 		}
 	}
@@ -115,8 +132,8 @@ func (s *SandboxService) Create(ctx context.Context, req *model.CreateSandboxReq
 
 	id := generateID()
 
-	if ttl <= 0 {
-		ttl = 3600
+	if ttl < 0 {
+		return nil, fmt.Errorf("ttl must be >= 0")
 	}
 
 	accessToken, err := security.GenerateToken(32)
@@ -136,9 +153,28 @@ func (s *SandboxService) Create(ctx context.Context, req *model.CreateSandboxReq
 	accessURL := fmt.Sprintf("%s/api/v1/sandbox/%s", gatewayURL, id)
 
 	now := time.Now().UTC()
+	expiresAt := computeExpiresAt(now, ttl)
 	envJSONBytes, err := json.Marshal(env)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal env: %w", err)
+	}
+	volumeClaimName := ""
+	persistenceMode := ""
+	persistenceSize := ""
+	persistenceStorageClass := ""
+	persistenceReclaimPolicy := ""
+	persistenceEnabled := false
+	runtimeKind := "pod"
+	runtimeName := fmt.Sprintf("sandbox-%s", id)
+	if persistence != nil && persistence.Enabled {
+		persistenceEnabled = true
+		persistenceMode = persistence.Mode
+		persistenceSize = persistence.Size
+		persistenceStorageClass = persistence.StorageClassName
+		persistenceReclaimPolicy = persistence.ReclaimPolicy
+		volumeClaimName = fmt.Sprintf("sandbox-data-%s", id)
+		runtimeKind = "deployment"
+		runtimeName = fmt.Sprintf("sandbox-%s", id)
 	}
 	record := &store.SandboxRecord{
 		ID:                    id,
@@ -159,8 +195,16 @@ func (s *SandboxService) Create(ctx context.Context, req *model.CreateSandboxReq
 		AccessTokenKeyID:      keyID,
 		AccessTokenSHA256:     tokenHash,
 		AccessURL:             accessURL,
+		PersistenceEnabled:    persistenceEnabled,
+		PersistenceMode:       persistenceMode,
+		PersistenceSize:       persistenceSize,
+		StorageClassName:      persistenceStorageClass,
+		VolumeClaimName:       volumeClaimName,
+		VolumeReclaimPolicy:   persistenceReclaimPolicy,
+		RuntimeKind:           runtimeKind,
+		RuntimeName:           runtimeName,
 		CreatedAt:             now,
-		ExpiresAt:             now.Add(time.Duration(ttl) * time.Second),
+		ExpiresAt:             expiresAt,
 		UpdatedAt:             now,
 	}
 	if err := s.sandboxStore.Create(ctx, record); err != nil {
@@ -221,34 +265,70 @@ func (s *SandboxService) Create(ctx context.Context, req *model.CreateSandboxReq
 		AccessToken:    accessToken,
 	}
 
-	pod, err := s.k8sClient.CreatePod(ctx, opts)
-	if err != nil {
-		_ = s.sandboxStore.UpdateStatus(ctx, id, string(model.SandboxStatusFailed), err.Error(), time.Now().UTC())
-		_ = s.sandboxStore.AppendStatusHistory(ctx, id, "api", "creating", string(model.SandboxStatusFailed), err.Error(), nil, time.Now().UTC())
-		return nil, fmt.Errorf("failed to create pod: %w", err)
-	}
+	var lifecycleStatus = string(model.SandboxStatusPending)
+	if persistenceEnabled {
+		persistentOpts := k8s.CreatePersistentSandboxOptions{
+			CreatePodOptions: k8s.CreatePodOptions{
+				ID:             id,
+				Image:          image,
+				Command:        spec.Command,
+				Args:           spec.Args,
+				CPU:            cpu,
+				Memory:         memory,
+				TTL:            ttl,
+				Env:            env,
+				Annotations:    annotations,
+				StartupScript:  startupScript,
+				StartupFiles:   files,
+				ReadinessProbe: probe,
+				Network:        k8sNetwork,
+				AccessToken:    accessToken,
+			},
+			StorageClassName: persistenceStorageClass,
+			VolumeSize:       persistenceSize,
+			VolumeClaimName:  volumeClaimName,
+		}
+		if _, err := s.k8sClient.CreatePersistentSandbox(ctx, persistentOpts); err != nil {
+			_ = s.sandboxStore.UpdateStatus(ctx, id, string(model.SandboxStatusFailed), err.Error(), time.Now().UTC())
+			_ = s.sandboxStore.AppendStatusHistory(ctx, id, "api", "creating", string(model.SandboxStatusFailed), err.Error(), nil, time.Now().UTC())
+			return nil, fmt.Errorf("failed to create persistent sandbox: %w", err)
+		}
+		_ = s.sandboxStore.UpdateStatus(ctx, id, lifecycleStatus, "", time.Now().UTC())
+		_ = s.sandboxStore.AppendStatusHistory(ctx, id, "api", "creating", lifecycleStatus, "deployment created", nil, time.Now().UTC())
+	} else {
+		pod, err := s.k8sClient.CreatePod(ctx, opts)
+		if err != nil {
+			_ = s.sandboxStore.UpdateStatus(ctx, id, string(model.SandboxStatusFailed), err.Error(), time.Now().UTC())
+			_ = s.sandboxStore.AppendStatusHistory(ctx, id, "api", "creating", string(model.SandboxStatusFailed), err.Error(), nil, time.Now().UTC())
+			return nil, fmt.Errorf("failed to create pod: %w", err)
+		}
 
-	lifecycleStatus := string(convertPodStatus(pod))
-	if err := s.sandboxStore.UpdateObservedState(
-		ctx,
-		id,
-		string(pod.UID),
-		string(pod.Status.Phase),
-		pod.Status.PodIP,
-		lifecycleStatus,
-		"",
-		time.Now().UTC(),
-		time.Now().UTC(),
-	); err != nil {
-		return nil, err
+		lifecycleStatus = string(convertPodStatus(pod))
+		if err := s.sandboxStore.UpdateObservedState(
+			ctx,
+			id,
+			string(pod.UID),
+			string(pod.Status.Phase),
+			pod.Status.PodIP,
+			lifecycleStatus,
+			"",
+			time.Now().UTC(),
+			time.Now().UTC(),
+		); err != nil {
+			return nil, err
+		}
+		_ = s.sandboxStore.AppendStatusHistory(ctx, id, "api", "creating", lifecycleStatus, "pod created", nil, time.Now().UTC())
 	}
-	_ = s.sandboxStore.AppendStatusHistory(ctx, id, "api", "creating", lifecycleStatus, "pod created", nil, time.Now().UTC())
 
 	// Only apply domain allowlist policy if internet access is enabled
 	if networkConfig != nil && networkConfig.AllowInternetAccess && len(networkConfig.AllowedDomains) > 0 {
 		netPolicyMgr := k8s.NewNetworkPolicyManager(s.k8sClient)
 		if err := netPolicyMgr.ApplyDomainAllowlistPolicy(ctx, id, networkConfig.AllowedDomains); err != nil {
-			_ = s.k8sClient.DeletePod(ctx, id)
+			if persistenceEnabled {
+				_ = s.k8sClient.DeletePersistentSandbox(ctx, id, volumeClaimName, persistenceReclaimPolicy)
+			} else {
+				_ = s.k8sClient.DeletePod(ctx, id)
+			}
 			_ = s.sandboxStore.UpdateStatus(ctx, id, string(model.SandboxStatusFailed), err.Error(), time.Now().UTC())
 			return nil, fmt.Errorf("failed to apply domain allowlist policy: %w", err)
 		}
@@ -422,15 +502,53 @@ func (s *SandboxService) Delete(ctx context.Context, id string) error {
 			Warn("failed to delete domain allowlist policy", "error", err)
 	}
 
-	if err := s.k8sClient.DeletePod(ctx, id); err != nil && !apierrors.IsNotFound(err) {
-		_ = s.sandboxStore.UpdateStatus(ctx, id, string(model.SandboxStatusFailed), err.Error(), time.Now().UTC())
-		return err
+	if record.PersistenceEnabled {
+		if err := s.k8sClient.DeletePersistentSandbox(ctx, id, record.VolumeClaimName, record.VolumeReclaimPolicy); err != nil && !apierrors.IsNotFound(err) {
+			_ = s.sandboxStore.UpdateStatus(ctx, id, string(model.SandboxStatusFailed), err.Error(), time.Now().UTC())
+			return err
+		}
+	} else {
+		if err := s.k8sClient.DeletePod(ctx, id); err != nil && !apierrors.IsNotFound(err) {
+			_ = s.sandboxStore.UpdateStatus(ctx, id, string(model.SandboxStatusFailed), err.Error(), time.Now().UTC())
+			return err
+		}
 	}
 
 	if err := s.sandboxStore.MarkDeleted(ctx, id, "deleted by request", time.Now().UTC()); err != nil {
 		return err
 	}
 	_ = s.sandboxStore.AppendStatusHistory(ctx, id, "api", string(model.SandboxStatusTerminating), "deleted", "delete completed", nil, time.Now().UTC())
+	return nil
+}
+
+func (s *SandboxService) Restart(ctx context.Context, id string) error {
+	record, err := s.sandboxStore.GetByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	if record == nil || record.LifecycleStatus == "deleted" || record.DesiredState == store.DesiredStateDeleted {
+		return ErrSandboxNotFound
+	}
+	if !record.PersistenceEnabled {
+		return ErrSandboxRestartNotSupported
+	}
+	if record.LifecycleStatus == "terminating" {
+		return ErrSandboxRestartInvalidState
+	}
+
+	fromStatus := record.LifecycleStatus
+	if err := s.k8sClient.RestartPersistentSandbox(ctx, id); err != nil {
+		if apierrors.IsNotFound(err) {
+			return ErrSandboxNotFound
+		}
+		return err
+	}
+
+	now := time.Now().UTC()
+	if err := s.sandboxStore.UpdateStatus(ctx, id, string(model.SandboxStatusPending), "restart requested", now); err != nil {
+		return err
+	}
+	_ = s.sandboxStore.AppendStatusHistory(ctx, id, "api", fromStatus, string(model.SandboxStatusPending), "restart requested", nil, now)
 	return nil
 }
 
@@ -633,10 +751,18 @@ func (s *SandboxService) cleanExpiredSandboxes() {
 		}
 
 		_ = s.sandboxStore.SetDesiredDeleted(ctx, sandboxID, time.Now().UTC())
-		if err := s.k8sClient.DeletePod(ctx, sandboxID); err != nil && !apierrors.IsNotFound(err) {
-			logger.Warn("failed to delete pod", "sandbox_id", sandboxID, "error", err)
-			_ = s.sandboxStore.UpdateStatus(ctx, sandboxID, string(model.SandboxStatusFailed), err.Error(), time.Now().UTC())
-			continue
+		if rec.PersistenceEnabled {
+			if err := s.k8sClient.DeletePersistentSandbox(ctx, sandboxID, rec.VolumeClaimName, rec.VolumeReclaimPolicy); err != nil && !apierrors.IsNotFound(err) {
+				logger.Warn("failed to delete persistent sandbox", "sandbox_id", sandboxID, "error", err)
+				_ = s.sandboxStore.UpdateStatus(ctx, sandboxID, string(model.SandboxStatusFailed), err.Error(), time.Now().UTC())
+				continue
+			}
+		} else {
+			if err := s.k8sClient.DeletePod(ctx, sandboxID); err != nil && !apierrors.IsNotFound(err) {
+				logger.Warn("failed to delete pod", "sandbox_id", sandboxID, "error", err)
+				_ = s.sandboxStore.UpdateStatus(ctx, sandboxID, string(model.SandboxStatusFailed), err.Error(), time.Now().UTC())
+				continue
+			}
 		}
 		if err := s.sandboxStore.MarkDeleted(ctx, sandboxID, "ttl expired", time.Now().UTC()); err != nil {
 			logger.Warn("failed to mark sandbox deleted", "sandbox_id", sandboxID, "error", err)
@@ -656,6 +782,17 @@ func (s *SandboxService) recordToSandbox(record *store.SandboxRecord) (*model.Sa
 }
 
 func (s *SandboxService) recordToSandboxMetadata(record *store.SandboxRecord) model.Sandbox {
+	var persistence *model.SandboxPersistence
+	if record.PersistenceEnabled || record.PersistenceMode != "" || record.PersistenceSize != "" || record.StorageClassName != "" || record.VolumeClaimName != "" || record.VolumeReclaimPolicy != "" {
+		persistence = &model.SandboxPersistence{
+			Enabled:          record.PersistenceEnabled,
+			Mode:             record.PersistenceMode,
+			Size:             record.PersistenceSize,
+			StorageClassName: record.StorageClassName,
+			ReclaimPolicy:    record.VolumeReclaimPolicy,
+			VolumeClaimName:  record.VolumeClaimName,
+		}
+	}
 	return model.Sandbox{
 		ID:              record.ID,
 		Image:           record.Image,
@@ -677,7 +814,17 @@ func (s *SandboxService) recordToSandboxMetadata(record *store.SandboxRecord) mo
 		UpdatedAt:       record.UpdatedAt,
 		DeletedAt:       record.DeletedAt,
 		AccessURL:       record.AccessURL,
+		Persistence:     persistence,
+		RuntimeKind:     record.RuntimeKind,
+		RuntimeName:     record.RuntimeName,
 	}
+}
+
+func computeExpiresAt(now time.Time, ttl int) time.Time {
+	if ttl == 0 {
+		return time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC)
+	}
+	return now.Add(time.Duration(ttl) * time.Second)
 }
 
 func parseLifecycleStatus(v string) model.SandboxStatus {

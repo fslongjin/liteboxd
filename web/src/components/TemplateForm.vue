@@ -51,8 +51,41 @@
         <t-input v-model="form.spec.resources.memory" placeholder="如: 512Mi" />
       </t-form-item>
       <t-form-item label="TTL (秒)">
-        <t-input-number v-model="form.spec.ttl" :min="60" :max="86400" />
+        <t-input-number v-model="form.spec.ttl" :min="0" :max="86400" />
       </t-form-item>
+      <t-divider>持久化配置</t-divider>
+      <t-form-item label="启用持久化">
+        <t-switch v-model="persistenceEnabled" />
+        <t-tooltip content="启用后将使用 PVC 持久化 rootfs（适用于长期运行沙箱）">
+          <t-icon
+            name="help-circle"
+            style="margin-left: 8px; color: var(--td-text-color-placeholder)"
+          />
+        </t-tooltip>
+      </t-form-item>
+      <template v-if="persistenceEnabled">
+        <t-form-item label="模式">
+          <t-select
+            v-model="persistenceMode"
+            :options="[{ label: 'rootfs-overlay', value: 'rootfs-overlay' }]"
+          />
+        </t-form-item>
+        <t-form-item label="磁盘大小">
+          <t-input v-model="persistenceSize" placeholder="如: 1Gi" />
+        </t-form-item>
+        <t-form-item label="StorageClass">
+          <t-input v-model="persistenceStorageClassName" placeholder="如: longhorn" />
+        </t-form-item>
+        <t-form-item label="回收策略">
+          <t-select
+            v-model="persistenceReclaimPolicy"
+            :options="[
+              { label: 'Delete（删除模板沙箱时删除PVC）', value: 'Delete' },
+              { label: 'Retain（保留PVC）', value: 'Retain' },
+            ]"
+          />
+        </t-form-item>
+      </template>
       <t-form-item label="环境变量">
         <t-textarea
           v-model="envText"
@@ -189,6 +222,59 @@ const networkAllowedDomains = computed({
       form.value.spec.network = { allowInternetAccess: false, allowedDomains: [] }
     }
     form.value.spec.network.allowedDomains = v
+  },
+})
+
+const persistenceEnabled = computed({
+  get: () => form.value.spec.persistence?.enabled ?? false,
+  set: (v: boolean) => {
+    if (!v) {
+      form.value.spec.persistence = undefined
+      return
+    }
+    if (!form.value.spec.persistence) {
+      form.value.spec.persistence = {
+        enabled: true,
+        mode: 'rootfs-overlay',
+        size: '1Gi',
+        storageClassName: 'longhorn',
+        reclaimPolicy: 'Delete',
+      }
+      return
+    }
+    form.value.spec.persistence.enabled = true
+  },
+})
+
+const persistenceMode = computed({
+  get: () => form.value.spec.persistence?.mode || 'rootfs-overlay',
+  set: (v: string) => {
+    if (!form.value.spec.persistence) return
+    form.value.spec.persistence.mode = v
+  },
+})
+
+const persistenceSize = computed({
+  get: () => form.value.spec.persistence?.size || '',
+  set: (v: string) => {
+    if (!form.value.spec.persistence) return
+    form.value.spec.persistence.size = v
+  },
+})
+
+const persistenceStorageClassName = computed({
+  get: () => form.value.spec.persistence?.storageClassName || '',
+  set: (v: string) => {
+    if (!form.value.spec.persistence) return
+    form.value.spec.persistence.storageClassName = v
+  },
+})
+
+const persistenceReclaimPolicy = computed({
+  get: () => form.value.spec.persistence?.reclaimPolicy || 'Delete',
+  set: (v: string) => {
+    if (!form.value.spec.persistence) return
+    form.value.spec.persistence.reclaimPolicy = v
   },
 })
 

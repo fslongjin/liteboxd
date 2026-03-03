@@ -8,6 +8,7 @@ import (
 
 	"github.com/fslongjin/liteboxd/backend/internal/model"
 	"github.com/fslongjin/liteboxd/backend/internal/store"
+	"k8s.io/apimachinery/pkg/api/resource"
 )
 
 // TemplateService handles template business logic
@@ -47,10 +48,51 @@ func validateSpec(spec *model.TemplateSpec) error {
 	if spec.Image == "" {
 		return fmt.Errorf("image is required")
 	}
+	if err := validatePersistenceSpec(spec.Persistence); err != nil {
+		return err
+	}
 	if err := validateNetworkSpec(spec.Network); err != nil {
 		return err
 	}
 	return nil
+}
+
+func validatePersistenceSpec(spec *model.PersistenceSpec) error {
+	if spec == nil || !spec.Enabled {
+		return nil
+	}
+
+	if spec.Mode == "" {
+		spec.Mode = model.PersistenceModeRootFSOverlay
+	}
+	if spec.Mode != model.PersistenceModeRootFSOverlay {
+		return fmt.Errorf("persistence.mode must be %q", model.PersistenceModeRootFSOverlay)
+	}
+	spec.Size = strings.TrimSpace(spec.Size)
+	if spec.Size == "" {
+		spec.Size = model.PersistenceDefaultSize
+	}
+	if _, err := resource.ParseQuantity(spec.Size); err != nil {
+		return fmt.Errorf("persistence.size is invalid: %w", err)
+	}
+
+	spec.StorageClassName = strings.TrimSpace(spec.StorageClassName)
+	if spec.StorageClassName == "" {
+		return fmt.Errorf("persistence.storageClassName is required when persistence.enabled=true")
+	}
+	if strings.EqualFold(spec.StorageClassName, "local-path") {
+		return fmt.Errorf("persistence.storageClassName local-path is not supported for persistent-rootfs; use Longhorn or another CSI with hard quota")
+	}
+
+	if spec.ReclaimPolicy == "" {
+		spec.ReclaimPolicy = model.PersistenceReclaimDelete
+	}
+	switch spec.ReclaimPolicy {
+	case model.PersistenceReclaimDelete, model.PersistenceReclaimRetain:
+		return nil
+	default:
+		return fmt.Errorf("persistence.reclaimPolicy must be one of %q or %q", model.PersistenceReclaimDelete, model.PersistenceReclaimRetain)
+	}
 }
 
 func validateNetworkSpec(spec *model.NetworkSpec) error {

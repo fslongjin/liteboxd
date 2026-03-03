@@ -16,6 +16,7 @@ import (
 type Config struct {
 	Cluster  ClusterConfig  `yaml:"cluster"`
 	Network  NetworkConfig  `yaml:"network"`
+	Storage  StorageConfig  `yaml:"storage"`
 	LiteBoxd LiteBoxdConfig `yaml:"liteboxd"`
 	Runtime  RuntimeConfig  `yaml:"runtime"`
 }
@@ -70,6 +71,21 @@ type CiliumConfig struct {
 	PodCIDR              string `yaml:"podCIDR"`
 	KubeProxyReplacement bool   `yaml:"kubeProxyReplacement"`
 	EnableEgressGateway  bool   `yaml:"enableEgressGateway"`
+}
+
+type StorageConfig struct {
+	Longhorn LonghornConfig `yaml:"longhorn"`
+}
+
+type LonghornConfig struct {
+	Enabled                bool   `yaml:"enabled"`
+	Namespace              string `yaml:"namespace"`
+	ReleaseName            string `yaml:"releaseName"`
+	ChartRepoURL           string `yaml:"chartRepoURL"`
+	ChartVersion           string `yaml:"chartVersion"`
+	DefaultReplicaCount    int    `yaml:"defaultReplicaCount"`
+	SetDefaultStorageClass *bool  `yaml:"setDefaultStorageClass"`
+	HelmInstallScriptURL   string `yaml:"helmInstallScriptURL"`
 }
 
 type LiteBoxdConfig struct {
@@ -184,6 +200,25 @@ func (c *Config) setDefaults(configPath string) {
 	if c.Network.Cilium.PodCIDR == "" {
 		c.Network.Cilium.PodCIDR = "10.42.0.0/16"
 	}
+	if c.Storage.Longhorn.Namespace == "" {
+		c.Storage.Longhorn.Namespace = "longhorn-system"
+	}
+	if c.Storage.Longhorn.ReleaseName == "" {
+		c.Storage.Longhorn.ReleaseName = "longhorn"
+	}
+	if c.Storage.Longhorn.ChartRepoURL == "" {
+		c.Storage.Longhorn.ChartRepoURL = "https://charts.longhorn.io"
+	}
+	if c.Storage.Longhorn.DefaultReplicaCount <= 0 {
+		c.Storage.Longhorn.DefaultReplicaCount = 1
+	}
+	if c.Storage.Longhorn.SetDefaultStorageClass == nil {
+		v := true
+		c.Storage.Longhorn.SetDefaultStorageClass = &v
+	}
+	if c.Storage.Longhorn.HelmInstallScriptURL == "" {
+		c.Storage.Longhorn.HelmInstallScriptURL = "https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3"
+	}
 
 	if c.LiteBoxd.NamespaceSystem == "" {
 		c.LiteBoxd.NamespaceSystem = "liteboxd-system"
@@ -264,6 +299,23 @@ func (c *Config) Validate(opts LoadOptions) error {
 		}
 		if !ok {
 			return fmt.Errorf("for cn mirror mode, network.cilium.version must be <= 1.18.6, got %q", c.Network.Cilium.Version)
+		}
+	}
+	if c.Storage.Longhorn.Enabled {
+		if strings.TrimSpace(c.Storage.Longhorn.Namespace) == "" {
+			return errors.New("storage.longhorn.namespace is required when enabled=true")
+		}
+		if strings.TrimSpace(c.Storage.Longhorn.ReleaseName) == "" {
+			return errors.New("storage.longhorn.releaseName is required when enabled=true")
+		}
+		if strings.TrimSpace(c.Storage.Longhorn.ChartRepoURL) == "" {
+			return errors.New("storage.longhorn.chartRepoURL is required when enabled=true")
+		}
+		if c.Storage.Longhorn.DefaultReplicaCount <= 0 {
+			return fmt.Errorf("storage.longhorn.defaultReplicaCount must be > 0, got %d", c.Storage.Longhorn.DefaultReplicaCount)
+		}
+		if strings.TrimSpace(c.Storage.Longhorn.HelmInstallScriptURL) == "" {
+			return errors.New("storage.longhorn.helmInstallScriptURL is required when enabled=true")
 		}
 	}
 	if opts.RequireLiteBoxd {

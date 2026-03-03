@@ -196,6 +196,68 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
+  /sandboxes/pvcs:
+    get:
+      tags:
+        - sandboxes
+      summary: List sandbox PVC mappings
+      description: Returns joined PVC mappings from metadata store and Kubernetes PVC objects.
+      operationId: listSandboxPVCMappings
+      parameters:
+        - name: sandbox_id
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Filter by sandbox ID (exact match)
+        - name: storage_class
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Filter by StorageClass name
+        - name: state
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [bound, orphan_pvc, dangling_metadata]
+          description: Filter by mapping state
+        - name: page
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: page_size
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        '200':
+          description: PVC mapping list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PVCMappingListResponse'
+        '400':
+          description: Invalid query parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
   /sandboxes/reconcile/runs:
     get:
       tags:
@@ -329,6 +391,47 @@ paths:
       responses:
         '204':
           description: Sandbox deleted successfully
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /sandboxes/{id}/restart:
+    post:
+      tags:
+        - sandboxes
+      summary: Restart a sandbox
+      description: Restarts a sandbox by recreating its Pod. Only persistence-enabled sandboxes are restartable.
+      operationId: restartSandbox
+      parameters:
+        - $ref: '#/components/parameters/SandboxId'
+      responses:
+        '200':
+          description: Restart requested
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActionResponse'
+        '400':
+          description: Sandbox is not persistence-enabled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Sandbox not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Sandbox is terminating or deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '500':
           description: Internal server error
           content:
@@ -1035,6 +1138,16 @@ components:
           type: string
           format: date-time
           description: Deletion timestamp in RFC3339 format when deleted
+        persistence:
+          $ref: '#/components/schemas/SandboxPersistence'
+        runtimeKind:
+          type: string
+          description: Runtime workload kind, e.g. pod|deployment
+          example: "pod"
+        runtimeName:
+          type: string
+          description: Runtime workload name in Kubernetes
+          example: "sandbox-a1b2c3d4"
         accessToken:
           type: string
           description: Access token for gateway sandbox access
@@ -1085,13 +1198,15 @@ components:
             ttl:
               type: integer
               description: Time to live in seconds
-              minimum: 1
+              minimum: 0
               example: 3600
             env:
               type: object
               additionalProperties:
                 type: string
               description: Additional environment variables (merged with template env)
+            persistence:
+              $ref: '#/components/schemas/SandboxPersistenceOverrides'
 
     SandboxListResponse:
       type: object
@@ -1116,6 +1231,76 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/Sandbox'
+        total:
+          type: integer
+        page:
+          type: integer
+        page_size:
+          type: integer
+
+    PVCMapping:
+      type: object
+      required:
+        - pvcName
+        - namespace
+        - state
+        - source
+      properties:
+        pvcName:
+          type: string
+          description: PVC name
+          example: sandbox-data-a1b2c3d4
+        namespace:
+          type: string
+          description: PVC namespace
+          example: liteboxd-sandbox
+        storageClassName:
+          type: string
+          description: StorageClass name
+          example: longhorn
+        requestedSize:
+          type: string
+          description: Requested storage size
+          example: 1Gi
+        phase:
+          type: string
+          description: PVC phase from Kubernetes
+          example: Bound
+        pvName:
+          type: string
+          description: Bound PV name
+        sandboxId:
+          type: string
+          description: Mapped sandbox ID from metadata (if any)
+        sandboxLifecycleStatus:
+          type: string
+          description: Sandbox lifecycle status from metadata (if any)
+          example: running
+        reclaimPolicy:
+          type: string
+          description: Configured reclaim policy from metadata
+          enum: [Delete, Retain]
+        state:
+          type: string
+          description: Mapping state between DB and K8s
+          enum: [bound, orphan_pvc, dangling_metadata]
+        source:
+          type: string
+          description: Data source of this mapping item
+          enum: [db+k8s, db, k8s]
+
+    PVCMappingListResponse:
+      type: object
+      required:
+        - items
+        - total
+        - page
+        - page_size
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/PVCMapping'
         total:
           type: integer
         page:
@@ -1304,6 +1489,16 @@ components:
           description: Success message
           example: "file uploaded successfully"
 
+    ActionResponse:
+      type: object
+      required:
+        - message
+      properties:
+        message:
+          type: string
+          description: Action result message
+          example: "restart requested"
+
     Error:
       type: object
       required:
@@ -1364,7 +1559,7 @@ components:
           type: array
           items:
             type: string
-          description: Override container command; omit to use image default (OCI CMD)
+          description: Override container command; omit to use image default (OCI CMD).
         args:
           type: array
           items:
@@ -1381,7 +1576,7 @@ components:
               default: "512Mi"
         ttl:
           type: integer
-          default: 3600
+          default: 0
         env:
           type: object
           additionalProperties:
@@ -1397,6 +1592,56 @@ components:
             $ref: '#/components/schemas/FileSpec'
         readinessProbe:
           $ref: '#/components/schemas/ProbeSpec'
+        persistence:
+          $ref: '#/components/schemas/PersistenceSpec'
+
+    PersistenceSpec:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+          default: false
+        mode:
+          type: string
+          description: Persistence mode. Current supported value is rootfs-overlay.
+          example: rootfs-overlay
+        size:
+          type: string
+          description: Persistent volume size (Kubernetes quantity)
+          example: 1Gi
+        storageClassName:
+          type: string
+          description: StorageClass used for persistent volume provisioning
+          example: longhorn
+        reclaimPolicy:
+          type: string
+          description: Volume reclaim behavior on sandbox deletion
+          enum: [Delete, Retain]
+          default: Delete
+
+    SandboxPersistence:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+        mode:
+          type: string
+        size:
+          type: string
+        storageClassName:
+          type: string
+        reclaimPolicy:
+          type: string
+        volumeClaimName:
+          type: string
+
+    SandboxPersistenceOverrides:
+      type: object
+      properties:
+        size:
+          type: string
+          description: Override persistent volume size for this sandbox
+          example: 40Gi
 
     FileSpec:
       type: object

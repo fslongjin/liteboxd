@@ -57,6 +57,11 @@ const router = createRouter({
       component: () => import('../views/MetadataReconcile.vue'),
     },
     {
+      path: '/metadata/pvcs',
+      name: 'metadata-pvcs',
+      component: () => import('../views/MetadataPVCList.vue'),
+    },
+    {
       path: '/settings/api-keys',
       name: 'api-keys',
       component: () => import('../views/APIKeys.vue'),

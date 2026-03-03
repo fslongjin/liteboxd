@@ -3,9 +3,9 @@ package service
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
+	"github.com/fslongjin/liteboxd/backend/internal/logx"
 	"github.com/fslongjin/liteboxd/backend/internal/model"
 	"gopkg.in/yaml.v3"
 )
@@ -26,32 +26,40 @@ func NewImportExportService(templateSvc *TemplateService, prepullSvc *PrepullSer
 
 // ImportFromYAML imports templates from YAML content
 func (s *ImportExportService) ImportFromYAML(ctx context.Context, yamlContent []byte, strategy model.ImportStrategy, autoPrepull bool) (*model.ImportTemplatesResponse, error) {
+	logger := logx.LoggerWithRequestID(ctx).With("component", "template_import")
+
 	var response model.ImportTemplatesResponse
 	var prepullImages []string
 
 	// Parse YAML to determine if it's a single template or a list
 	var templateList []model.TemplateYAML
+	yamlType := "single"
 
 	// Try to parse as TemplateList first
 	var listYAML model.TemplateListYAML
 	if err := yaml.Unmarshal(yamlContent, &listYAML); err == nil && listYAML.Kind == "SandboxTemplateList" {
 		// It's a list of templates
 		templateList = listYAML.Items
+		yamlType = "list"
 	} else {
 		// Try to parse as a single template
 		var singleTemplate model.TemplateYAML
 		if err := yaml.Unmarshal(yamlContent, &singleTemplate); err != nil {
+			logger.Warn("import yaml parse failed", "error", err)
 			return nil, fmt.Errorf("invalid YAML format: %w", err)
 		}
 		if singleTemplate.Kind != "SandboxTemplate" {
+			logger.Warn("import yaml kind invalid", "kind", singleTemplate.Kind)
 			return nil, fmt.Errorf("invalid kind: expected SandboxTemplate, got %s", singleTemplate.Kind)
 		}
 		templateList = []model.TemplateYAML{singleTemplate}
 	}
 
 	response.Total = len(templateList)
+	logger.Info("import yaml parsed", "strategy", strategy, "prepull", autoPrepull, "yaml_type", yamlType, "total", response.Total)
 
 	// Process each template
+	failedNames := make([]string, 0)
 	for _, tpl := range templateList {
 		result := s.processTemplate(ctx, tpl, strategy)
 		response.Results = append(response.Results, result)
@@ -71,6 +79,7 @@ func (s *ImportExportService) ImportFromYAML(ctx context.Context, yamlContent []
 			response.Skipped++
 		case "failed":
 			response.Failed++
+			failedNames = append(failedNames, tpl.Metadata.Name)
 		}
 	}
 
@@ -85,11 +94,24 @@ func (s *ImportExportService) ImportFromYAML(ctx context.Context, yamlContent []
 		}()
 	}
 
+	logger.Info(
+		"import yaml completed",
+		"total", response.Total,
+		"created", response.Created,
+		"updated", response.Updated,
+		"skipped", response.Skipped,
+		"failed", response.Failed,
+		"failed_templates", failedNames,
+		"prepull_started", len(response.PrepullStarted),
+	)
+
 	return &response, nil
 }
 
 // processTemplate processes a single template import according to the strategy
 func (s *ImportExportService) processTemplate(ctx context.Context, tpl model.TemplateYAML, strategy model.ImportStrategy) model.ImportResult {
+	logger := logx.LoggerWithRequestID(ctx).With("component", "template_import", "template_name", tpl.Metadata.Name, "strategy", strategy)
+
 	result := model.ImportResult{
 		Name: tpl.Metadata.Name,
 	}
@@ -98,11 +120,18 @@ func (s *ImportExportService) processTemplate(ctx context.Context, tpl model.Tem
 	if tpl.Metadata.Name == "" {
 		result.Action = "failed"
 		result.Error = "template name is required"
+		logger.Warn("template import failed", "error", result.Error)
 		return result
 	}
 
 	// Check if template exists
 	existing, err := s.templateSvc.Get(ctx, tpl.Metadata.Name)
+	if err != nil {
+		result.Action = "failed"
+		result.Error = fmt.Sprintf("failed to query existing template: %v", err)
+		logger.Error("template import failed", "error", result.Error)
+		return result
+	}
 	exists := err == nil && existing != nil
 
 	// Apply strategy
@@ -110,23 +139,28 @@ func (s *ImportExportService) processTemplate(ctx context.Context, tpl model.Tem
 	case model.ImportStrategyCreateOnly:
 		if exists {
 			result.Action = "skipped"
+			result.Error = "template already exists (strategy=create-only)"
+			logger.Info("template import skipped", "reason", result.Error)
 			return result
 		}
-		result.Action = s.createOrUpdateTemplate(ctx, tpl, false)
+		result.Action, result.Error = s.createOrUpdateTemplate(ctx, tpl, false)
 
 	case model.ImportStrategyUpdateOnly:
 		if !exists {
 			result.Action = "skipped"
+			result.Error = "template not found (strategy=update-only)"
+			logger.Info("template import skipped", "reason", result.Error)
 			return result
 		}
-		result.Action = s.createOrUpdateTemplate(ctx, tpl, true)
+		result.Action, result.Error = s.createOrUpdateTemplate(ctx, tpl, true)
 
 	case model.ImportStrategyCreateOrUpdate:
-		result.Action = s.createOrUpdateTemplate(ctx, tpl, exists)
+		result.Action, result.Error = s.createOrUpdateTemplate(ctx, tpl, exists)
 
 	default:
 		result.Action = "failed"
 		result.Error = fmt.Sprintf("invalid strategy: %s", strategy)
+		logger.Warn("template import failed", "error", result.Error)
 	}
 
 	// Get the version for created/updated templates
@@ -134,13 +168,24 @@ func (s *ImportExportService) processTemplate(ctx context.Context, tpl model.Tem
 		if updated, err := s.templateSvc.Get(ctx, tpl.Metadata.Name); err == nil {
 			result.Version = updated.LatestVersion
 		}
+		logger.Info("template import succeeded", "action", result.Action, "version", result.Version)
+		return result
+	}
+
+	if result.Action == "failed" {
+		if result.Error == "" {
+			result.Error = "unknown import failure"
+		}
+		logger.Error("template import failed", "error", result.Error)
+	} else if result.Action == "skipped" {
+		logger.Info("template import skipped", "reason", result.Error)
 	}
 
 	return result
 }
 
 // createOrUpdateTemplate creates or updates a template
-func (s *ImportExportService) createOrUpdateTemplate(ctx context.Context, tpl model.TemplateYAML, isUpdate bool) string {
+func (s *ImportExportService) createOrUpdateTemplate(ctx context.Context, tpl model.TemplateYAML, isUpdate bool) (string, string) {
 	// Build CreateTemplateRequest from YAML
 	req := &model.CreateTemplateRequest{
 		Name:        tpl.Metadata.Name,
@@ -163,20 +208,17 @@ func (s *ImportExportService) createOrUpdateTemplate(ctx context.Context, tpl mo
 
 		_, err := s.templateSvc.Update(ctx, tpl.Metadata.Name, updateReq)
 		if err != nil {
-			return "failed"
+			return "failed", err.Error()
 		}
-		return "updated"
+		return "updated", ""
 	}
 
 	_, err := s.templateSvc.Create(ctx, req)
 	if err != nil {
-		if strings.Contains(err.Error(), "already exists") {
-			return "failed"
-		}
-		return "failed"
+		return "failed", err.Error()
 	}
 
-	return "created"
+	return "created", ""
 }
 
 // ExportToYAML exports templates to YAML format

@@ -17,6 +17,14 @@
           <t-button theme="primary" @click="openTerminal" :disabled="sandbox?.status !== 'running'">
             登录沙箱
           </t-button>
+          <t-popconfirm
+            v-if="canRestartSandbox"
+            content="确定要重启该持久化 Sandbox 吗？"
+            @confirm="restartSandbox"
+          >
+            <t-button theme="warning" variant="outline" :loading="restarting">重启</t-button>
+          </t-popconfirm>
+          <t-button v-else theme="warning" variant="outline" disabled>重启(仅持久化)</t-button>
           <t-popconfirm content="确定要删除该 Sandbox 吗？" @confirm="deleteSandbox">
             <t-button theme="danger" variant="outline">删除</t-button>
           </t-popconfirm>
@@ -27,19 +35,31 @@
         <t-descriptions v-if="sandbox" :column="2">
           <t-descriptions-item label="ID">{{ sandbox.id }}</t-descriptions-item>
           <t-descriptions-item label="镜像">{{ sandbox.image }}</t-descriptions-item>
+          <t-descriptions-item label="模板">{{ sandbox.template || '-' }}</t-descriptions-item>
+          <t-descriptions-item label="模板版本">{{
+            sandbox.templateVersion || '-'
+          }}</t-descriptions-item>
           <t-descriptions-item label="CPU">{{ sandbox.cpu }}</t-descriptions-item>
           <t-descriptions-item label="内存">{{ sandbox.memory }}</t-descriptions-item>
-          <t-descriptions-item label="TTL">{{ sandbox.ttl }} 秒</t-descriptions-item>
+          <t-descriptions-item label="TTL">{{ formatTTL(sandbox.ttl) }}</t-descriptions-item>
           <t-descriptions-item label="状态">
             <t-tag :theme="getStatusTheme(sandbox.status)">{{
               getStatusText(sandbox.status)
             }}</t-tag>
           </t-descriptions-item>
+          <t-descriptions-item label="运行时">{{ sandbox.runtimeKind || '-' }}</t-descriptions-item>
+          <t-descriptions-item label="运行时对象">{{
+            sandbox.runtimeName || '-'
+          }}</t-descriptions-item>
+          <t-descriptions-item label="持久化">{{ formatPersistence(sandbox) }}</t-descriptions-item>
+          <t-descriptions-item label="PVC">{{
+            sandbox.persistence?.volumeClaimName || '-'
+          }}</t-descriptions-item>
           <t-descriptions-item label="创建时间">{{
             formatTime(sandbox.created_at)
           }}</t-descriptions-item>
           <t-descriptions-item label="过期时间">{{
-            formatTime(sandbox.expires_at)
+            sandbox.ttl === 0 ? '永久' : formatTime(sandbox.expires_at)
           }}</t-descriptions-item>
         </t-descriptions>
       </t-loading>
@@ -135,7 +155,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
+import { computed, ref, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { MessagePlugin } from 'tdesign-vue-next'
 import { sandboxApi, type Sandbox } from '../api/sandbox'
@@ -153,6 +173,7 @@ const lastExitCode = ref<number | null>(null)
 
 const logs = ref('')
 const events = ref<string[]>([])
+const restarting = ref(false)
 
 const uploadPath = ref('')
 const uploadFiles = ref<any[]>([])
@@ -201,6 +222,23 @@ const formatTime = (time: string) => {
   if (!time) return '-'
   return new Date(time).toLocaleString()
 }
+
+const formatTTL = (ttl?: number) => {
+  if (ttl === 0) return '永久'
+  if (!ttl) return '-'
+  return `${ttl} 秒`
+}
+
+const formatPersistence = (sb: Sandbox) => {
+  const p = sb.persistence
+  if (!p || !p.enabled) return '关闭'
+  const mode = p.mode || 'rootfs-overlay'
+  const size = p.size || '-'
+  const sc = p.storageClassName || '-'
+  return `${mode} / ${size} / ${sc}`
+}
+
+const canRestartSandbox = computed(() => sandbox.value?.persistence?.enabled === true)
 
 const loadSandbox = async () => {
   loading.value = true
@@ -324,6 +362,20 @@ const deleteSandbox = async () => {
     router.push('/sandboxes')
   } catch (err: any) {
     MessagePlugin.error('删除失败: ' + (err.response?.data?.error || err.message))
+  }
+}
+
+const restartSandbox = async () => {
+  restarting.value = true
+  try {
+    await sandboxApi.restart(sandboxId)
+    MessagePlugin.success('已触发重启')
+    await loadSandbox()
+    await loadLogs()
+  } catch (err: any) {
+    MessagePlugin.error('重启失败: ' + (err.response?.data?.error || err.message))
+  } finally {
+    restarting.value = false
   }
 }
 

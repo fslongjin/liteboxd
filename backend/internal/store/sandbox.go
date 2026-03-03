@@ -38,6 +38,14 @@ type SandboxRecord struct {
 	AccessTokenKeyID      string
 	AccessTokenSHA256     string
 	AccessURL             string
+	PersistenceEnabled    bool
+	PersistenceMode       string
+	PersistenceSize       string
+	StorageClassName      string
+	VolumeClaimName       string
+	VolumeReclaimPolicy   string
+	RuntimeKind           string
+	RuntimeName           string
 	CreatedAt             time.Time
 	ExpiresAt             time.Time
 	UpdatedAt             time.Time
@@ -123,12 +131,16 @@ func (s *SandboxStore) Create(ctx context.Context, rec *SandboxRecord) error {
 			desired_state, lifecycle_status, status_reason,
 			cluster_namespace, pod_name, pod_uid, pod_phase, pod_ip, last_seen_at,
 			access_token_ciphertext, access_token_nonce, access_token_key_id, access_token_sha256, access_url,
+			persistence_enabled, persistence_mode, persistence_size, storage_class_name, volume_claim_name, volume_reclaim_policy,
+			runtime_kind, runtime_name,
 			created_at, expires_at, updated_at, deleted_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, rec.ID, rec.TemplateName, rec.TemplateVersion, rec.Image, rec.CPU, rec.Memory, rec.TTL, rec.EnvJSON,
 		rec.DesiredState, rec.LifecycleStatus, rec.StatusReason,
 		rec.ClusterNamespace, rec.PodName, rec.PodUID, rec.PodPhase, rec.PodIP, toNullTime(rec.LastSeenAt),
 		rec.AccessTokenCiphertext, rec.AccessTokenNonce, rec.AccessTokenKeyID, rec.AccessTokenSHA256, rec.AccessURL,
+		rec.PersistenceEnabled, rec.PersistenceMode, rec.PersistenceSize, rec.StorageClassName, rec.VolumeClaimName, rec.VolumeReclaimPolicy,
+		rec.RuntimeKind, rec.RuntimeName,
 		rec.CreatedAt, rec.ExpiresAt, rec.UpdatedAt, toNullTime(rec.DeletedAt),
 	)
 	if err != nil {
@@ -248,6 +260,7 @@ func (s *SandboxStore) ListMetadata(ctx context.Context, query SandboxMetadataQu
 func (s *SandboxStore) ListExpiredActive(ctx context.Context, now time.Time) ([]SandboxRecord, error) {
 	rows, err := s.db.QueryContext(ctx, sandboxSelectSQL+`
 		 WHERE desired_state = ?
+		   AND ttl > 0
 		   AND expires_at <= ?
 		   AND lifecycle_status NOT IN (?, ?)
 		 ORDER BY expires_at ASC
@@ -556,6 +569,8 @@ SELECT
 	desired_state, lifecycle_status, status_reason,
 	cluster_namespace, pod_name, pod_uid, pod_phase, pod_ip, last_seen_at,
 	access_token_ciphertext, access_token_nonce, access_token_key_id, access_token_sha256, access_url,
+	persistence_enabled, persistence_mode, persistence_size, storage_class_name, volume_claim_name, volume_reclaim_policy,
+	runtime_kind, runtime_name,
 	created_at, expires_at, updated_at, deleted_at
 FROM sandboxes`
 
@@ -568,6 +583,8 @@ func scanSandbox(row interface{ Scan(dest ...any) error }) (*SandboxRecord, erro
 		&rec.DesiredState, &rec.LifecycleStatus, &rec.StatusReason,
 		&rec.ClusterNamespace, &rec.PodName, &rec.PodUID, &rec.PodPhase, &rec.PodIP, &lastSeenAt,
 		&rec.AccessTokenCiphertext, &rec.AccessTokenNonce, &rec.AccessTokenKeyID, &rec.AccessTokenSHA256, &rec.AccessURL,
+		&rec.PersistenceEnabled, &rec.PersistenceMode, &rec.PersistenceSize, &rec.StorageClassName, &rec.VolumeClaimName, &rec.VolumeReclaimPolicy,
+		&rec.RuntimeKind, &rec.RuntimeName,
 		&rec.CreatedAt, &rec.ExpiresAt, &rec.UpdatedAt, &deletedAt,
 	); err != nil {
 		return nil, err

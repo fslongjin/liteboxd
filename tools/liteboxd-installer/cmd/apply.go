@@ -21,7 +21,7 @@ var clusterOnly bool
 
 func init() {
 	rootCmd.AddCommand(applyCmd)
-	applyCmd.Flags().BoolVar(&clusterOnly, "cluster-only", false, "Only manage K3s/Cilium/nodes; skip LiteBoxd deployment")
+	applyCmd.Flags().BoolVar(&clusterOnly, "cluster-only", false, "Only manage K3s/Cilium/Longhorn/nodes; skip LiteBoxd deployment")
 }
 
 func runApply(isResume bool) error {

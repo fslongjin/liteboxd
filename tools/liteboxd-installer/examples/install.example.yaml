@@ -46,6 +46,16 @@ network:
     kubeProxyReplacement: true
     enableEgressGateway: true
 
+storage:
+  longhorn:
+    enabled: true
+    namespace: "longhorn-system"
+    releaseName: "longhorn"
+    chartRepoURL: "https://charts.longhorn.io"
+    defaultReplicaCount: 1
+    setDefaultStorageClass: true
+    helmInstallScriptURL: "https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3"
+
 liteboxd:
   namespaceSystem: "liteboxd-system"
   namespaceSandbox: "liteboxd-sandbox"

@@ -24,6 +24,15 @@ export interface TemplateSpec {
   files?: FileSpec[]
   readinessProbe?: ProbeSpec
   network?: NetworkSpec
+  persistence?: PersistenceSpec
+}
+
+export interface PersistenceSpec {
+  enabled: boolean
+  mode?: string
+  size?: string
+  storageClassName?: string
+  reclaimPolicy?: string
 }
 
 export interface NetworkSpec {

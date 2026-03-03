@@ -25,8 +25,20 @@ export interface Sandbox {
   expires_at: string
   updated_at?: string
   deleted_at?: string
+  persistence?: SandboxPersistence
+  runtimeKind?: string
+  runtimeName?: string
   accessToken?: string
   accessUrl?: string
+}
+
+export interface SandboxPersistence {
+  enabled: boolean
+  mode?: string
+  size?: string
+  storageClassName?: string
+  reclaimPolicy?: string
+  volumeClaimName?: string
 }
 
 export interface SandboxMetadataListParams {
@@ -44,6 +56,35 @@ export interface SandboxMetadataListParams {
 
 export interface SandboxMetadataListResponse {
   items: Sandbox[]
+  total: number
+  page: number
+  page_size: number
+}
+
+export interface PVCMapping {
+  pvcName: string
+  namespace: string
+  storageClassName?: string
+  requestedSize?: string
+  phase?: string
+  pvName?: string
+  sandboxId?: string
+  sandboxLifecycleStatus?: string
+  reclaimPolicy?: string
+  state: 'bound' | 'orphan_pvc' | 'dangling_metadata'
+  source: 'db+k8s' | 'db' | 'k8s' | string
+}
+
+export interface PVCMappingListParams {
+  sandbox_id?: string
+  storage_class?: string
+  state?: 'bound' | 'orphan_pvc' | 'dangling_metadata'
+  page?: number
+  page_size?: number
+}
+
+export interface PVCMappingListResponse {
+  items: PVCMapping[]
   total: number
   page: number
   page_size: number
@@ -104,6 +145,9 @@ export interface CreateSandboxRequest {
     memory?: string
     ttl?: number
     env?: Record<string, string>
+    persistence?: {
+      size?: string
+    }
   }
 }
 
@@ -123,11 +167,18 @@ export interface LogsResponse {
   events: string[]
 }
 
+export interface ActionResponse {
+  message: string
+}
+
 export const sandboxApi = {
   list: () => api.get<{ items: Sandbox[] }>('/sandboxes'),
 
   listMetadata: (params?: SandboxMetadataListParams) =>
     api.get<SandboxMetadataListResponse>('/sandboxes/metadata', { params }),
+
+  listPVCMappings: (params?: PVCMappingListParams) =>
+    api.get<PVCMappingListResponse>('/sandboxes/pvcs', { params }),
 
   get: (id: string) => api.get<Sandbox>(`/sandboxes/${id}`),
 
@@ -137,6 +188,8 @@ export const sandboxApi = {
   create: (data: CreateSandboxRequest) => api.post<Sandbox>('/sandboxes', data),
 
   delete: (id: string) => api.delete(`/sandboxes/${id}`),
+
+  restart: (id: string) => api.post<ActionResponse>(`/sandboxes/${id}/restart`),
 
   exec: (id: string, data: ExecRequest) => api.post<ExecResponse>(`/sandboxes/${id}/exec`, data),
 

@@ -1,0 +1,34 @@
+apiVersion: liteboxd/v1
+kind: SandboxTemplate
+metadata:
+  name: code-interpreter-persistent
+  displayName: Code Interpreter Persistent
+  description: 持久化 rootfs 的 Code Interpreter 模板（Longhorn）
+  tags:
+    - code-interpreter
+    - persistent
+    - longhorn
+spec:
+  image: docker.cnb.cool/fslongjin/liteboxd/code-interpreter:v0.1.0
+  resources:
+    cpu: "1000m"
+    memory: "2Gi"
+  ttl: 0
+  env:
+    WORKSPACE_DIR: "/workspace"
+    JUPYTER_HOST: "0.0.0.0"
+    JUPYTER_PORT: "44771"
+    JUPYTER_TOKEN: "liteboxd-jupyter"
+    RUNTIME_PORT: "44772"
+  readinessProbe:
+    exec:
+      command: ["sh", "-c", "curl -sf http://127.0.0.1:44772/ping"]
+    initialDelaySeconds: 5
+    periodSeconds: 2
+    failureThreshold: 30
+  persistence:
+    enabled: true
+    mode: rootfs-overlay
+    size: 1Gi
+    storageClassName: longhorn
+    reclaimPolicy: Delete

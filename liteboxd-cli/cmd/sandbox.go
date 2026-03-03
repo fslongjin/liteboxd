@@ -84,6 +84,15 @@ var sandboxDeleteCmd = &cobra.Command{
 	RunE: runSandboxDelete,
 }
 
+var sandboxRestartCmd = &cobra.Command{
+	Use:   "restart <id>",
+	Short: "Restart a persistence-enabled sandbox",
+	Args:  cobra.ExactArgs(1),
+	Example: `  # Restart a persistence-enabled sandbox
+  liteboxd sandbox restart <sandbox-id>`,
+	RunE: runSandboxRestart,
+}
+
 var (
 	execTimeout     int
 	exitCodeFlag    bool
@@ -187,6 +196,9 @@ func init() {
 	sandboxDeleteCmd.Flags().BoolVarP(&forceFlag, "force", "f", false, "Skip confirmation")
 	sandboxCmd.AddCommand(sandboxDeleteCmd)
 
+	// Restart command
+	sandboxCmd.AddCommand(sandboxRestartCmd)
+
 	// Exec command
 	sandboxExecCmd.Flags().IntVar(&execTimeout, "timeout", 30, "Execution timeout in seconds")
 	sandboxExecCmd.Flags().BoolVar(&quietFlag, "quiet", false, "Only print stdout")
@@ -216,7 +228,8 @@ func runSandboxCreate(cmd *cobra.Command, args []string) error {
 
 	// Build overrides
 	var overrides *liteboxd.SandboxOverrides
-	if cpuFlag != "" || memoryFlag != "" || ttlFlag != 0 || len(envFlag) > 0 {
+	ttlChanged := cmd.Flags().Changed("ttl")
+	if cpuFlag != "" || memoryFlag != "" || ttlChanged || len(envFlag) > 0 {
 		overrides = &liteboxd.SandboxOverrides{}
 		if cpuFlag != "" {
 			overrides.CPU = cpuFlag
@@ -224,8 +237,9 @@ func runSandboxCreate(cmd *cobra.Command, args []string) error {
 		if memoryFlag != "" {
 			overrides.Memory = memoryFlag
 		}
-		if ttlFlag != 0 {
-			overrides.TTL = ttlFlag
+		if ttlChanged {
+			ttl := ttlFlag
+			overrides.TTL = &ttl
 		}
 		if len(envFlag) > 0 {
 			overrides.Env = parseEnvVars(envFlag)
@@ -320,6 +334,19 @@ func runSandboxDelete(cmd *cobra.Command, args []string) error {
 	}
 
 	fmt.Printf("Deleted sandbox: %s\n", id)
+	return nil
+}
+
+func runSandboxRestart(cmd *cobra.Command, args []string) error {
+	client := getAPIClient()
+	ctx, _ := getContext()
+
+	id := args[0]
+	if err := client.Sandbox.Restart(ctx, id); err != nil {
+		return err
+	}
+
+	fmt.Printf("Restart requested: %s\n", id)
 	return nil
 }
 

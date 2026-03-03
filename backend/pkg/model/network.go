@@ -5,10 +5,10 @@ type NetworkSpec struct {
 	// AllowInternetAccess enables outbound internet access for the sandbox.
 	// When false (default), the sandbox can only access DNS and internal services.
 	// When true, the sandbox can access the internet (HTTP/HTTPS only).
-	AllowInternetAccess bool `json:"allowInternetAccess"`
+	AllowInternetAccess bool `json:"allowInternetAccess" yaml:"allowInternetAccess"`
 
 	// AllowedDomains is an optional list of domains that the sandbox is allowed to access.
 	// This is a future enhancement for domain whitelist functionality.
 	// When empty, no domain filtering is applied (beyond the internet access setting).
-	AllowedDomains []string `json:"allowedDomains,omitempty"`
+	AllowedDomains []string `json:"allowedDomains,omitempty" yaml:"allowedDomains,omitempty"`
 }

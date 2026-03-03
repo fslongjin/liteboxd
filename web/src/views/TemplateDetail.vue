@@ -200,10 +200,49 @@
               <t-col :span="4">
                 <div class="stat-item">
                   <div class="stat-label">TTL</div>
-                  <div class="stat-value">{{ template?.spec?.ttl }}s</div>
+                  <div class="stat-value">{{ formatTTL(template?.spec?.ttl) }}</div>
                 </div>
               </t-col>
             </t-row>
+          </t-card>
+
+          <!-- Persistence -->
+          <t-card title="持久化配置" :bordered="false" header-bordered>
+            <t-list :split="false">
+              <t-list-item>
+                <t-list-item-meta title="持久化" />
+                <template #action>
+                  <t-tag v-if="template?.spec?.persistence?.enabled" theme="success" variant="light"
+                    >开启</t-tag
+                  >
+                  <t-tag v-else theme="default" variant="light">关闭</t-tag>
+                </template>
+              </t-list-item>
+              <t-list-item v-if="template?.spec?.persistence?.enabled">
+                <t-list-item-meta
+                  title="模式"
+                  :description="template?.spec?.persistence?.mode || '-'"
+                />
+              </t-list-item>
+              <t-list-item v-if="template?.spec?.persistence?.enabled">
+                <t-list-item-meta
+                  title="容量"
+                  :description="template?.spec?.persistence?.size || '-'"
+                />
+              </t-list-item>
+              <t-list-item v-if="template?.spec?.persistence?.enabled">
+                <t-list-item-meta
+                  title="StorageClass"
+                  :description="template?.spec?.persistence?.storageClassName || '-'"
+                />
+              </t-list-item>
+              <t-list-item v-if="template?.spec?.persistence?.enabled">
+                <t-list-item-meta
+                  title="回收策略"
+                  :description="template?.spec?.persistence?.reclaimPolicy || '-'"
+                />
+              </t-list-item>
+            </t-list>
           </t-card>
 
           <!-- Network -->
@@ -343,6 +382,12 @@ const formatTime = (time?: string) => {
   return new Date(time).toLocaleString()
 }
 
+const formatTTL = (ttl?: number) => {
+  if (ttl === 0) return '永久'
+  if (!ttl) return '-'
+  return `${ttl}s`
+}
+
 const loadTemplate = async () => {
   const name = route.params.name as string
   try {
@@ -400,7 +445,7 @@ const openEditDialog = () => {
       command: tmpl.spec?.command ?? [],
       args: tmpl.spec?.args ?? [],
       resources: tmpl.spec?.resources || { cpu: '', memory: '' },
-      ttl: tmpl.spec?.ttl || 3600,
+      ttl: tmpl.spec?.ttl ?? 0,
       network: {
         allowInternetAccess: tmpl.spec?.network?.allowInternetAccess ?? false,
         allowedDomains: tmpl.spec?.network?.allowedDomains ?? [],
@@ -408,6 +453,7 @@ const openEditDialog = () => {
       env: tmpl.spec?.env || {},
       startupScript: tmpl.spec?.startupScript || '',
       startupTimeout: tmpl.spec?.startupTimeout || 300,
+      persistence: tmpl.spec?.persistence ? { ...tmpl.spec.persistence } : undefined,
     },
     autoPrepull: false,
   }

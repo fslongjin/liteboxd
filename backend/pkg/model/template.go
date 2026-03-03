@@ -33,45 +33,62 @@ type TemplateVersion struct {
 	CreatedAt  time.Time    `json:"createdAt"`
 }
 
+const (
+	PersistenceModeRootFSOverlay = "rootfs-overlay"
+	PersistenceReclaimDelete     = "Delete"
+	PersistenceReclaimRetain     = "Retain"
+	PersistenceDefaultSize       = "1Gi"
+)
+
 // TemplateSpec defines the specification of a template
 type TemplateSpec struct {
-	Image          string            `json:"image"`
-	Command        []string          `json:"command,omitempty"` // Override container entrypoint; empty = use image default (OCI CMD)
-	Args           []string          `json:"args,omitempty"`    // Override container args; empty = use image default
-	Resources      ResourceSpec      `json:"resources"`
-	TTL            int               `json:"ttl"`
-	Env            map[string]string `json:"env,omitempty"`
-	StartupScript  string            `json:"startupScript,omitempty"`
-	StartupTimeout int               `json:"startupTimeout,omitempty"`
-	Files          []FileSpec        `json:"files,omitempty"`
-	ReadinessProbe *ProbeSpec        `json:"readinessProbe,omitempty"`
-	Network        *NetworkSpec      `json:"network,omitempty"`
+	Image          string            `json:"image" yaml:"image"`
+	Command        []string          `json:"command,omitempty" yaml:"command,omitempty"` // Override container entrypoint; empty = use image default (OCI CMD)
+	Args           []string          `json:"args,omitempty" yaml:"args,omitempty"`       // Override container args; empty = use image default
+	Resources      ResourceSpec      `json:"resources" yaml:"resources"`
+	TTL            int               `json:"ttl" yaml:"ttl"`
+	Env            map[string]string `json:"env,omitempty" yaml:"env,omitempty"`
+	StartupScript  string            `json:"startupScript,omitempty" yaml:"startupScript,omitempty"`
+	StartupTimeout int               `json:"startupTimeout,omitempty" yaml:"startupTimeout,omitempty"`
+	Files          []FileSpec        `json:"files,omitempty" yaml:"files,omitempty"`
+	ReadinessProbe *ProbeSpec        `json:"readinessProbe,omitempty" yaml:"readinessProbe,omitempty"`
+	Network        *NetworkSpec      `json:"network,omitempty" yaml:"network,omitempty"`
+	Persistence    *PersistenceSpec  `json:"persistence,omitempty" yaml:"persistence,omitempty"`
 }
 
 // ResourceSpec defines resource limits
 type ResourceSpec struct {
-	CPU    string `json:"cpu"`
-	Memory string `json:"memory"`
+	CPU    string `json:"cpu" yaml:"cpu"`
+	Memory string `json:"memory" yaml:"memory"`
 }
 
 // FileSpec defines a file to be uploaded to the sandbox
 type FileSpec struct {
-	Source      string `json:"source,omitempty"`
-	Destination string `json:"destination"`
-	Content     string `json:"content,omitempty"`
+	Source      string `json:"source,omitempty" yaml:"source,omitempty"`
+	Destination string `json:"destination" yaml:"destination"`
+	Content     string `json:"content,omitempty" yaml:"content,omitempty"`
 }
 
 // ProbeSpec defines a readiness probe
 type ProbeSpec struct {
-	Exec                ExecAction `json:"exec"`
-	InitialDelaySeconds int        `json:"initialDelaySeconds"`
-	PeriodSeconds       int        `json:"periodSeconds"`
-	FailureThreshold    int        `json:"failureThreshold"`
+	Exec                ExecAction `json:"exec" yaml:"exec"`
+	InitialDelaySeconds int        `json:"initialDelaySeconds" yaml:"initialDelaySeconds"`
+	PeriodSeconds       int        `json:"periodSeconds" yaml:"periodSeconds"`
+	FailureThreshold    int        `json:"failureThreshold" yaml:"failureThreshold"`
 }
 
 // ExecAction defines an exec action for probe
 type ExecAction struct {
-	Command []string `json:"command"`
+	Command []string `json:"command" yaml:"command"`
+}
+
+// PersistenceSpec defines persistent disk behavior for sandboxes created from a template.
+type PersistenceSpec struct {
+	Enabled          bool   `json:"enabled" yaml:"enabled"`
+	Mode             string `json:"mode,omitempty" yaml:"mode,omitempty"`
+	Size             string `json:"size,omitempty" yaml:"size,omitempty"`
+	StorageClassName string `json:"storageClassName,omitempty" yaml:"storageClassName,omitempty"`
+	ReclaimPolicy    string `json:"reclaimPolicy,omitempty" yaml:"reclaimPolicy,omitempty"`
 }
 
 // MarshalTags serializes Tags to JSON string for database storage
@@ -111,11 +128,19 @@ func (s *TemplateSpec) ApplyDefaults() {
 	if s.Resources.Memory == "" {
 		s.Resources.Memory = "512Mi"
 	}
-	if s.TTL == 0 {
-		s.TTL = 3600
-	}
 	if s.StartupTimeout == 0 {
 		s.StartupTimeout = 300
+	}
+	if s.Persistence != nil {
+		if s.Persistence.Enabled && s.Persistence.Mode == "" {
+			s.Persistence.Mode = PersistenceModeRootFSOverlay
+		}
+		if s.Persistence.Enabled && s.Persistence.Size == "" {
+			s.Persistence.Size = PersistenceDefaultSize
+		}
+		if s.Persistence.ReclaimPolicy == "" {
+			s.Persistence.ReclaimPolicy = PersistenceReclaimDelete
+		}
 	}
 }
 

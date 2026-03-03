@@ -45,6 +45,12 @@
             <template #resources="{ row }">
               {{ row.spec?.resources?.cpu || '-' }} / {{ row.spec?.resources?.memory || '-' }}
             </template>
+            <template #ttl="{ row }">
+              {{ formatTTL(row.spec?.ttl) }}
+            </template>
+            <template #persistence="{ row }">
+              {{ formatTemplatePersistence(row) }}
+            </template>
             <template #version="{ row }">
               <t-tag theme="primary" variant="light">v{{ row.latestVersion }}</t-tag>
             </template>
@@ -209,6 +215,8 @@ const columns = [
   { colKey: 'name', title: '名称', ellipsis: true },
   { colKey: 'image', title: '镜像', ellipsis: true },
   { colKey: 'resources', title: '资源', width: 120 },
+  { colKey: 'ttl', title: 'TTL', width: 90 },
+  { colKey: 'persistence', title: '持久化', ellipsis: true },
   { colKey: 'version', title: '版本', width: 80 },
   { colKey: 'createdAt', title: '创建时间', width: 180 },
   { colKey: 'operation', title: '操作', width: 100 },
@@ -223,6 +231,21 @@ const filteredTemplates = computed(() => {
 const formatTime = (time: string) => {
   if (!time) return '-'
   return new Date(time).toLocaleString()
+}
+
+const formatTTL = (ttl?: number) => {
+  if (ttl === 0) return '永久'
+  if (!ttl) return '-'
+  return `${ttl}s`
+}
+
+const formatTemplatePersistence = (tmpl: Template) => {
+  const p = tmpl.spec?.persistence
+  if (!p || !p.enabled) return '关闭'
+  const mode = p.mode || 'rootfs-overlay'
+  const size = p.size || '-'
+  const sc = p.storageClassName || '-'
+  return `${mode} / ${size} / ${sc}`
 }
 
 const loadTemplates = async () => {
@@ -298,7 +321,7 @@ const editTemplate = (tmpl: Template) => {
       command: tmpl.spec?.command ?? [],
       args: tmpl.spec?.args ?? [],
       resources: tmpl.spec?.resources || { cpu: '', memory: '' },
-      ttl: tmpl.spec?.ttl || 3600,
+      ttl: tmpl.spec?.ttl ?? 0,
       network: {
         allowInternetAccess: tmpl.spec?.network?.allowInternetAccess ?? false,
         allowedDomains: tmpl.spec?.network?.allowedDomains ?? [],
@@ -306,6 +329,7 @@ const editTemplate = (tmpl: Template) => {
       env: tmpl.spec?.env || {},
       startupScript: tmpl.spec?.startupScript || '',
       startupTimeout: tmpl.spec?.startupTimeout || 300,
+      persistence: tmpl.spec?.persistence ? { ...tmpl.spec.persistence } : undefined,
     },
     autoPrepull: false,
   }

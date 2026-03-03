@@ -351,6 +351,56 @@ func TestSandboxStoreListMetadata(t *testing.T) {
 	}
 }
 
+func TestSandboxStoreListExpiredActiveSkipsTTLZero(t *testing.T) {
+	initTestDB(t)
+	ctx := context.Background()
+	s := NewSandboxStore()
+	now := time.Now().UTC()
+
+	mk := func(id string, ttl int, expiresAt time.Time) *SandboxRecord {
+		return &SandboxRecord{
+			ID:                    id,
+			TemplateName:          "python",
+			TemplateVersion:       1,
+			Image:                 "python:3.11",
+			CPU:                   "500m",
+			Memory:                "512Mi",
+			TTL:                   ttl,
+			EnvJSON:               `{}`,
+			DesiredState:          DesiredStateActive,
+			LifecycleStatus:       "running",
+			ClusterNamespace:      "liteboxd-sandbox",
+			PodName:               "sandbox-" + id,
+			AccessTokenCiphertext: "cipher",
+			AccessTokenNonce:      "nonce",
+			AccessTokenKeyID:      "v1",
+			AccessTokenSHA256:     "hash",
+			AccessURL:             "http://gateway/" + id,
+			CreatedAt:             now.Add(-time.Hour),
+			ExpiresAt:             expiresAt,
+			UpdatedAt:             now.Add(-time.Hour),
+		}
+	}
+
+	if err := s.Create(ctx, mk("ttl-zero", 0, now.Add(-10*time.Minute))); err != nil {
+		t.Fatalf("Create ttl-zero error = %v", err)
+	}
+	if err := s.Create(ctx, mk("ttl-expired", 300, now.Add(-10*time.Minute))); err != nil {
+		t.Fatalf("Create ttl-expired error = %v", err)
+	}
+
+	expired, err := s.ListExpiredActive(ctx, now)
+	if err != nil {
+		t.Fatalf("ListExpiredActive error = %v", err)
+	}
+	if len(expired) != 1 {
+		t.Fatalf("ListExpiredActive len = %d, want 1", len(expired))
+	}
+	if expired[0].ID != "ttl-expired" {
+		t.Fatalf("unexpected expired sandbox = %s", expired[0].ID)
+	}
+}
+
 func TestSandboxStoreListStatusHistory(t *testing.T) {
 	initTestDB(t)
 	ctx := context.Background()

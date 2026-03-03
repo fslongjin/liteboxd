@@ -157,6 +157,14 @@ func createTables() error {
 			access_token_key_id TEXT NOT NULL,
 			access_token_sha256 TEXT NOT NULL,
 			access_url TEXT NOT NULL,
+			persistence_enabled BOOLEAN NOT NULL DEFAULT 0,
+			persistence_mode TEXT NOT NULL DEFAULT '',
+			persistence_size TEXT NOT NULL DEFAULT '',
+			storage_class_name TEXT NOT NULL DEFAULT '',
+			volume_claim_name TEXT NOT NULL DEFAULT '',
+			volume_reclaim_policy TEXT NOT NULL DEFAULT '',
+			runtime_kind TEXT NOT NULL DEFAULT 'pod',
+			runtime_name TEXT NOT NULL DEFAULT '',
 			created_at TIMESTAMP NOT NULL,
 			expires_at TIMESTAMP NOT NULL,
 			updated_at TIMESTAMP NOT NULL,
@@ -165,6 +173,9 @@ func createTables() error {
 	`)
 	if err != nil {
 		return fmt.Errorf("failed to create sandboxes table: %w", err)
+	}
+	if err := ensureSandboxColumns(); err != nil {
+		return err
 	}
 
 	sandboxIndexes := []string{
@@ -298,5 +309,46 @@ func createTables() error {
 		}
 	}
 
+	return nil
+}
+
+func ensureSandboxColumns() error {
+	columns := map[string]string{
+		"persistence_enabled":   "BOOLEAN NOT NULL DEFAULT 0",
+		"persistence_mode":      "TEXT NOT NULL DEFAULT ''",
+		"persistence_size":      "TEXT NOT NULL DEFAULT ''",
+		"storage_class_name":    "TEXT NOT NULL DEFAULT ''",
+		"volume_claim_name":     "TEXT NOT NULL DEFAULT ''",
+		"volume_reclaim_policy": "TEXT NOT NULL DEFAULT ''",
+		"runtime_kind":          "TEXT NOT NULL DEFAULT 'pod'",
+		"runtime_name":          "TEXT NOT NULL DEFAULT ''",
+	}
+
+	existing := map[string]struct{}{}
+	rows, err := DB.Query(`PRAGMA table_info(sandboxes)`)
+	if err != nil {
+		return fmt.Errorf("failed to inspect sandboxes table schema: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, colType string
+		var notNull int
+		var dfltValue sql.NullString
+		var pk int
+		if err := rows.Scan(&cid, &name, &colType, &notNull, &dfltValue, &pk); err != nil {
+			return fmt.Errorf("failed to scan sandboxes schema row: %w", err)
+		}
+		existing[name] = struct{}{}
+	}
+	for name, ddl := range columns {
+		if _, ok := existing[name]; ok {
+			continue
+		}
+		stmt := fmt.Sprintf("ALTER TABLE sandboxes ADD COLUMN %s %s", name, ddl)
+		if _, err := DB.Exec(stmt); err != nil {
+			return fmt.Errorf("failed to add sandboxes.%s: %w", name, err)
+		}
+	}
 	return nil
 }

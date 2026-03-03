@@ -87,6 +87,9 @@ func (i *Installer) Apply() error {
 			return err
 		}
 	}
+	if err := i.runStep("install_longhorn", i.cluster.InstallOrUpgradeLonghorn); err != nil {
+		return err
+	}
 	if i.opts.ClusterOnly {
 		i.logf("cluster-only mode enabled, skip LiteBoxd deployment")
 		_ = i.stateStore.Mark("deploy_liteboxd", state.StatusDone, "skipped: cluster-only mode")

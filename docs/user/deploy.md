@@ -1,6 +1,8 @@
 # LiteBoxd Deployment Guide (via liteboxd-installer)
 
 本文说明如何通过 `liteboxd-installer` 一键部署 LiteBoxd。
+Longhorn 专项配置可参考 `docs/user/longhorn.md`。
+如果你要启用持久化 rootfs 沙箱，建议同时启用 Longhorn。
 
 ## 1. 前置条件
 
@@ -39,6 +41,21 @@ cp tools/liteboxd-installer/examples/install.example.yaml /tmp/liteboxd-install.
 - `liteboxd.ingressHost`
 - `liteboxd.images.api/gateway/web`
 - `liteboxd.configDir`（LiteBoxd kustomize patch 目录）
+- `storage.longhorn.enabled`（是否由 installer 自动安装 Longhorn）
+
+Longhorn 推荐配置（单机/测试环境）：
+
+```yaml
+storage:
+  longhorn:
+    enabled: true
+    namespace: "longhorn-system"
+    releaseName: "longhorn"
+    chartRepoURL: "https://charts.longhorn.io"
+    defaultReplicaCount: 1
+    setDefaultStorageClass: true
+    helmInstallScriptURL: "https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3"
+```
 
 ## 4. 设置密码环境变量
 
@@ -59,7 +76,7 @@ export AGENT2_PASS='your-agent2-password'
 - `--log-file /tmp/liteboxd-installer.log`：输出详细执行日志
 - `--state /tmp/liteboxd-state.json`：指定状态文件位置
 - `--dry-run`：只打印计划，不真正执行
-- `--cluster-only`：仅维护 K3s/Cilium/节点，不部署 LiteBoxd
+- `--cluster-only`：仅维护 K3s/Cilium/Longhorn/节点，不部署 LiteBoxd
 
 示例：
 
@@ -93,3 +110,17 @@ export AGENT2_PASS='your-agent2-password'
 
 - installer 为幂等设计，重复执行 `apply` 是预期用法
 - Cilium 配置未变化时会跳过安装/升级步骤，避免不必要网络抖动
+- Longhorn 配置未变化时会跳过安装/升级步骤
+- `storage.longhorn.enabled=true` 时，installer 会自动处理各节点 `open-iscsi` 依赖
+
+## 9. Longhorn 部署后检查
+
+```bash
+kubectl get sc
+kubectl -n longhorn-system get pods
+```
+
+预期：
+
+- 可看到 `longhorn` StorageClass
+- `longhorn-system` 命名空间内核心组件处于 Running/Ready

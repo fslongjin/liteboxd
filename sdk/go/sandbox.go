@@ -76,6 +76,11 @@ func (s *SandboxService) Delete(ctx context.Context, id string) error {
 	return s.client.doEmptyResponse(ctx, "DELETE", s.client.buildPath("sandboxes", id), nil, nil)
 }
 
+// Restart restarts a persistence-enabled sandbox.
+func (s *SandboxService) Restart(ctx context.Context, id string) error {
+	return s.client.doEmptyResponse(ctx, "POST", s.client.buildPath("sandboxes", id, "restart"), nil, nil)
+}
+
 // Execute runs a command in the sandbox.
 func (s *SandboxService) Execute(ctx context.Context, id string, command []string, timeout int) (*ExecResponse, error) {
 	req := &ExecRequest{

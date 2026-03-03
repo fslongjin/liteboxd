@@ -25,10 +25,24 @@
         </t-button>
         <t-button
           variant="text"
-          :class="['nav-link', { active: route.path.startsWith('/metadata') }]"
+          :class="[
+            'nav-link',
+            {
+              active:
+                route.path.startsWith('/metadata/sandboxes') ||
+                route.path.startsWith('/metadata/reconcile'),
+            },
+          ]"
           @click="navigateTo('/metadata/sandboxes')"
         >
           元数据记录
+        </t-button>
+        <t-button
+          variant="text"
+          :class="['nav-link', { active: route.path.startsWith('/metadata/pvcs') }]"
+          @click="navigateTo('/metadata/pvcs')"
+        >
+          PVC管理
         </t-button>
       </div>
       <div class="header-right">

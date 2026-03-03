@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/fslongjin/liteboxd/backend/internal/logx"
 	"github.com/fslongjin/liteboxd/backend/internal/model"
 	"github.com/fslongjin/liteboxd/backend/internal/service"
 	"github.com/gin-gonic/gin"
@@ -33,9 +34,12 @@ func (h *ImportExportHandler) RegisterRoutes(r *gin.RouterGroup) {
 
 // Import handles POST /templates/import
 func (h *ImportExportHandler) Import(c *gin.Context) {
+	logger := logx.LoggerWithRequestID(c.Request.Context()).With("component", "template_import")
+
 	// Parse form data
 	var req model.ImportTemplatesRequest
 	if err := c.ShouldBind(&req); err != nil {
+		logger.Warn("import request bind failed", "error", err)
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": gin.H{
 				"code":    "INVALID_REQUEST",
@@ -53,6 +57,7 @@ func (h *ImportExportHandler) Import(c *gin.Context) {
 	// Get file from form
 	file, err := c.FormFile("file")
 	if err != nil {
+		logger.Warn("import file missing", "error", err)
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": gin.H{
 				"code":    "INVALID_REQUEST",
@@ -63,8 +68,11 @@ func (h *ImportExportHandler) Import(c *gin.Context) {
 	}
 
 	// Read file content
+	logger.Info("import request received", "filename", file.Filename, "size", file.Size, "strategy", req.Strategy, "prepull", req.Prepull)
+
 	src, err := file.Open()
 	if err != nil {
+		logger.Error("failed to open import file", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": gin.H{
 				"code":    "INTERNAL_ERROR",
@@ -77,6 +85,7 @@ func (h *ImportExportHandler) Import(c *gin.Context) {
 
 	content, err := io.ReadAll(src)
 	if err != nil {
+		logger.Error("failed to read import file", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": gin.H{
 				"code":    "INTERNAL_ERROR",
@@ -89,6 +98,7 @@ func (h *ImportExportHandler) Import(c *gin.Context) {
 	// Import templates
 	response, err := h.importSvc.ImportFromYAML(c.Request.Context(), content, req.Strategy, req.Prepull)
 	if err != nil {
+		logger.Error("import execution failed", "error", err, "strategy", req.Strategy, "prepull", req.Prepull)
 		if strings.Contains(err.Error(), "invalid YAML") {
 			c.JSON(http.StatusBadRequest, gin.H{
 				"error": gin.H{
@@ -106,6 +116,15 @@ func (h *ImportExportHandler) Import(c *gin.Context) {
 		})
 		return
 	}
+
+	logger.Info(
+		"import execution completed",
+		"total", response.Total,
+		"created", response.Created,
+		"updated", response.Updated,
+		"skipped", response.Skipped,
+		"failed", response.Failed,
+	)
 
 	c.JSON(http.StatusOK, response)
 }

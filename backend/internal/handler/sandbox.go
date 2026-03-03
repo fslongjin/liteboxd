@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"io"
 	"net/http"
 	"strconv"
@@ -29,12 +30,14 @@ func (h *SandboxHandler) RegisterRoutes(r *gin.RouterGroup) {
 		sandboxes.POST("", h.Create)
 		sandboxes.GET("", h.List)
 		sandboxes.GET("/metadata", h.ListMetadata)
+		sandboxes.GET("/pvcs", h.ListPVCMappings)
 		sandboxes.POST("/reconcile", h.TriggerReconcile)
 		sandboxes.GET("/reconcile/runs", h.ListReconcileRuns)
 		sandboxes.GET("/reconcile/runs/:id", h.GetReconcileRun)
 		sandboxes.GET("/:id", h.Get)
 		sandboxes.GET("/:id/status-history", h.GetStatusHistory)
 		sandboxes.DELETE("/:id", h.Delete)
+		sandboxes.POST("/:id/restart", h.Restart)
 		sandboxes.POST("/:id/exec", h.Exec)
 		sandboxes.GET("/:id/exec/interactive", h.ExecInteractive)
 		sandboxes.GET("/:id/logs", h.GetLogs)
@@ -137,6 +140,29 @@ func (h *SandboxHandler) ListMetadata(c *gin.Context) {
 	c.JSON(http.StatusOK, resp)
 }
 
+func (h *SandboxHandler) ListPVCMappings(c *gin.Context) {
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
+	state := c.Query("state")
+	if state != "" && state != model.PVCMappingStateBound && state != model.PVCMappingStateOrphanPVC && state != model.PVCMappingStateDanglingMeta {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid state, expected one of [bound, orphan_pvc, dangling_metadata]"})
+		return
+	}
+
+	resp, err := h.svc.ListPVCMappings(c.Request.Context(), model.PVCMappingListOptions{
+		SandboxID:    c.Query("sandbox_id"),
+		StorageClass: c.Query("storage_class"),
+		State:        state,
+		Page:         page,
+		PageSize:     pageSize,
+	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
 func (h *SandboxHandler) Delete(c *gin.Context) {
 	id := c.Param("id")
 
@@ -147,6 +173,24 @@ func (h *SandboxHandler) Delete(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusNoContent, nil)
+}
+
+func (h *SandboxHandler) Restart(c *gin.Context) {
+	id := c.Param("id")
+	if err := h.svc.Restart(c.Request.Context(), id); err != nil {
+		switch {
+		case errors.Is(err, service.ErrSandboxNotFound):
+			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		case errors.Is(err, service.ErrSandboxRestartNotSupported):
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		case errors.Is(err, service.ErrSandboxRestartInvalidState):
+			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		}
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "restart requested"})
 }
 
 func (h *SandboxHandler) GetStatusHistory(c *gin.Context) {

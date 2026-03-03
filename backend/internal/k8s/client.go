@@ -14,6 +14,7 @@ import (
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/dynamic"
@@ -244,7 +245,8 @@ func (c *Client) CreatePod(ctx context.Context, opts CreatePodOptions) (*corev1.
 			Annotations: annotations,
 		},
 		Spec: corev1.PodSpec{
-			RestartPolicy: corev1.RestartPolicyNever,
+			AutomountServiceAccountToken: boolPtr(false),
+			RestartPolicy:                corev1.RestartPolicyNever,
 			Tolerations: []corev1.Toleration{
 				{
 					Key:      "node.kubernetes.io/disk-pressure",
@@ -280,8 +282,7 @@ func (c *Client) CreatePod(ctx context.Context, opts CreatePodOptions) (*corev1.
 }
 
 func (c *Client) GetPod(ctx context.Context, sandboxID string) (*corev1.Pod, error) {
-	podName := fmt.Sprintf("sandbox-%s", sandboxID)
-	return c.clientset.CoreV1().Pods(c.sandboxNS).Get(ctx, podName, metav1.GetOptions{})
+	return c.getSandboxPod(ctx, sandboxID)
 }
 
 func (c *Client) ListPods(ctx context.Context) (*corev1.PodList, error) {
@@ -301,12 +302,35 @@ type ExecResult struct {
 	ExitCode int
 }
 
+func isPersistentRootFSPod(pod *corev1.Pod) bool {
+	for _, c := range pod.Spec.InitContainers {
+		if c.Name == rootfsOverlayInitName {
+			return true
+		}
+	}
+	return false
+}
+
+func wrapCommandForRootFS(pod *corev1.Pod, command []string) []string {
+	if len(command) == 0 || !isPersistentRootFSPod(pod) {
+		return command
+	}
+	wrapped := make([]string, 0, len(command)+2)
+	wrapped = append(wrapped, "chroot", rootfsOverlayMergedPath)
+	wrapped = append(wrapped, command...)
+	return wrapped
+}
+
 func (c *Client) Exec(ctx context.Context, sandboxID string, command []string) (*ExecResult, error) {
-	podName := fmt.Sprintf("sandbox-%s", sandboxID)
+	pod, err := c.getSandboxPod(ctx, sandboxID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve sandbox pod: %w", err)
+	}
+	command = wrapCommandForRootFS(pod, command)
 
 	req := c.clientset.CoreV1().RESTClient().Post().
 		Resource("pods").
-		Name(podName).
+		Name(pod.Name).
 		Namespace(c.sandboxNS).
 		SubResource("exec").
 		VersionedParams(&corev1.PodExecOptions{
@@ -347,8 +371,12 @@ func (c *Client) Exec(ctx context.Context, sandboxID string, command []string) (
 }
 
 func (c *Client) UploadFile(ctx context.Context, sandboxID string, destPath string, content []byte) error {
-	podName := fmt.Sprintf("sandbox-%s", sandboxID)
-	dir := filepath.Dir(destPath)
+	pod, err := c.getSandboxPod(ctx, sandboxID)
+	if err != nil {
+		return fmt.Errorf("failed to resolve sandbox pod: %w", err)
+	}
+	command := []string{"tar", "-xf", "-", "-C", filepath.Dir(destPath)}
+	command = wrapCommandForRootFS(pod, command)
 	filename := filepath.Base(destPath)
 
 	var tarBuf bytes.Buffer
@@ -370,12 +398,12 @@ func (c *Client) UploadFile(ctx context.Context, sandboxID string, destPath stri
 
 	req := c.clientset.CoreV1().RESTClient().Post().
 		Resource("pods").
-		Name(podName).
+		Name(pod.Name).
 		Namespace(c.sandboxNS).
 		SubResource("exec").
 		VersionedParams(&corev1.PodExecOptions{
 			Container: "main",
-			Command:   []string{"tar", "-xf", "-", "-C", dir},
+			Command:   command,
 			Stdin:     true,
 			Stdout:    true,
 			Stderr:    true,
@@ -401,18 +429,22 @@ func (c *Client) UploadFile(ctx context.Context, sandboxID string, destPath stri
 }
 
 func (c *Client) DownloadFile(ctx context.Context, sandboxID string, srcPath string) ([]byte, error) {
-	podName := fmt.Sprintf("sandbox-%s", sandboxID)
-	dir := filepath.Dir(srcPath)
+	pod, err := c.getSandboxPod(ctx, sandboxID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve sandbox pod: %w", err)
+	}
+	command := []string{"tar", "-cf", "-", "-C", filepath.Dir(srcPath), filepath.Base(srcPath)}
+	command = wrapCommandForRootFS(pod, command)
 	filename := filepath.Base(srcPath)
 
 	req := c.clientset.CoreV1().RESTClient().Post().
 		Resource("pods").
-		Name(podName).
+		Name(pod.Name).
 		Namespace(c.sandboxNS).
 		SubResource("exec").
 		VersionedParams(&corev1.PodExecOptions{
 			Container: "main",
-			Command:   []string{"tar", "-cf", "-", "-C", dir, filename},
+			Command:   command,
 			Stdin:     false,
 			Stdout:    true,
 			Stderr:    true,
@@ -455,7 +487,10 @@ func (c *Client) DownloadFile(ctx context.Context, sandboxID string, srcPath str
 }
 
 func (c *Client) GetLogs(ctx context.Context, sandboxID string, tailLines int64) (string, error) {
-	podName := fmt.Sprintf("sandbox-%s", sandboxID)
+	pod, err := c.getSandboxPod(ctx, sandboxID)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve sandbox pod: %w", err)
+	}
 
 	opts := &corev1.PodLogOptions{
 		Container: "main",
@@ -464,7 +499,7 @@ func (c *Client) GetLogs(ctx context.Context, sandboxID string, tailLines int64)
 		opts.TailLines = &tailLines
 	}
 
-	req := c.clientset.CoreV1().Pods(c.sandboxNS).GetLogs(podName, opts)
+	req := c.clientset.CoreV1().Pods(c.sandboxNS).GetLogs(pod.Name, opts)
 	stream, err := req.Stream(ctx)
 	if err != nil {
 		return "", fmt.Errorf("failed to get logs: %w", err)
@@ -480,10 +515,13 @@ func (c *Client) GetLogs(ctx context.Context, sandboxID string, tailLines int64)
 }
 
 func (c *Client) GetPodEvents(ctx context.Context, sandboxID string) ([]string, error) {
-	podName := fmt.Sprintf("sandbox-%s", sandboxID)
+	pod, err := c.getSandboxPod(ctx, sandboxID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve sandbox pod: %w", err)
+	}
 
 	events, err := c.clientset.CoreV1().Events(c.sandboxNS).List(ctx, metav1.ListOptions{
-		FieldSelector: fmt.Sprintf("involvedObject.name=%s", podName),
+		FieldSelector: fmt.Sprintf("involvedObject.name=%s", pod.Name),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to get events: %w", err)
@@ -565,7 +603,8 @@ func (c *Client) CreatePrepullDaemonSet(ctx context.Context, opts CreatePrepullD
 					},
 				},
 				Spec: corev1.PodSpec{
-					RestartPolicy: corev1.RestartPolicyNever,
+					AutomountServiceAccountToken: boolPtr(false),
+					RestartPolicy:                corev1.RestartPolicyNever,
 					Containers: []corev1.Container{
 						{
 							Name:            "prepull",
@@ -705,8 +744,6 @@ func truePtr(b bool) *bool {
 
 // WaitForReady waits for a pod to be ready with optional custom readiness probe
 func (c *Client) WaitForReady(ctx context.Context, sandboxID string, probe *ProbeSpec) error {
-	podName := fmt.Sprintf("sandbox-%s", sandboxID)
-
 	// Default polling settings
 	pollInterval := 2 * time.Second
 	timeout := 5 * time.Minute
@@ -735,8 +772,11 @@ func (c *Client) WaitForReady(ctx context.Context, sandboxID string, probe *Prob
 		case <-ctx.Done():
 			return fmt.Errorf("timeout waiting for pod to be ready")
 		case <-ticker.C:
-			pod, err := c.clientset.CoreV1().Pods(c.sandboxNS).Get(ctx, podName, metav1.GetOptions{})
+			pod, err := c.getSandboxPod(ctx, sandboxID)
 			if err != nil {
+				if apierrors.IsNotFound(err) {
+					continue
+				}
 				return fmt.Errorf("failed to get pod: %w", err)
 			}
 
@@ -816,16 +856,20 @@ type ExecInteractiveOptions struct {
 // This is the core primitive for interactive terminal sessions.
 // Blocks until the command exits or ctx is cancelled.
 func (c *Client) ExecInteractive(ctx context.Context, sandboxID string, opts ExecInteractiveOptions) error {
-	podName := fmt.Sprintf("sandbox-%s", sandboxID)
+	pod, err := c.getSandboxPod(ctx, sandboxID)
+	if err != nil {
+		return fmt.Errorf("failed to resolve sandbox pod: %w", err)
+	}
+	command := wrapCommandForRootFS(pod, opts.Command)
 
 	req := c.clientset.CoreV1().RESTClient().Post().
 		Resource("pods").
-		Name(podName).
+		Name(pod.Name).
 		Namespace(c.sandboxNS).
 		SubResource("exec").
 		VersionedParams(&corev1.PodExecOptions{
 			Container: "main",
-			Command:   opts.Command,
+			Command:   command,
 			Stdin:     opts.Stdin != nil,
 			Stdout:    true,
 			Stderr:    !opts.TTY, // stderr merges into stdout when TTY
@@ -850,10 +894,9 @@ func (c *Client) ExecInteractive(ctx context.Context, sandboxID string, opts Exe
 
 // GetPodIP returns the IP address of a sandbox pod
 func (c *Client) GetPodIP(ctx context.Context, sandboxID string) (string, error) {
-	podName := fmt.Sprintf("sandbox-%s", sandboxID)
-	pod, err := c.clientset.CoreV1().Pods(c.sandboxNS).Get(ctx, podName, metav1.GetOptions{})
+	pod, err := c.getSandboxPod(ctx, sandboxID)
 	if err != nil {
-		return "", fmt.Errorf("failed to get pod: %w", err)
+		return "", fmt.Errorf("failed to resolve sandbox pod: %w", err)
 	}
 
 	if len(pod.Status.PodIP) == 0 {
@@ -865,10 +908,9 @@ func (c *Client) GetPodIP(ctx context.Context, sandboxID string) (string, error)
 
 // GetPodAccessToken retrieves the access token from a pod's annotations
 func (c *Client) GetPodAccessToken(ctx context.Context, sandboxID string) (string, error) {
-	podName := fmt.Sprintf("sandbox-%s", sandboxID)
-	pod, err := c.clientset.CoreV1().Pods(c.sandboxNS).Get(ctx, podName, metav1.GetOptions{})
+	pod, err := c.getSandboxPod(ctx, sandboxID)
 	if err != nil {
-		return "", fmt.Errorf("failed to get pod: %w", err)
+		return "", fmt.Errorf("failed to resolve sandbox pod: %w", err)
 	}
 
 	token, ok := pod.Annotations[AnnotationAccessToken]
