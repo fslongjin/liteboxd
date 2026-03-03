@@ -15,10 +15,11 @@ import (
 )
 
 type Options struct {
-	DryRun      bool
-	Verbose     bool
-	ClusterOnly bool
-	LogFile     string
+	DryRun       bool
+	Verbose      bool
+	ClusterOnly  bool
+	LiteBoxdOnly bool
+	LogFile      string
 }
 
 type Installer struct {
@@ -55,6 +56,10 @@ func New(cfg *config.Config, st *state.Store, opts Options) *Installer {
 }
 
 func (i *Installer) Apply() error {
+	if i.opts.LiteBoxdOnly {
+		return i.applyLiteBoxdOnly()
+	}
+
 	if err := i.runStep("precheck", i.cluster.Precheck); err != nil {
 		return err
 	}
@@ -103,6 +108,40 @@ func (i *Installer) Apply() error {
 		return err
 	}
 	return nil
+}
+
+func (i *Installer) applyLiteBoxdOnly() error {
+	i.logf("liteboxd-only mode enabled, skip cluster install/upgrade steps")
+	i.markClusterStepsSkipped("skipped: liteboxd-only mode")
+
+	if err := i.runStep("precheck_cluster_connection", i.precheckClusterConnectionForLiteBoxd); err != nil {
+		return err
+	}
+	if err := i.runStep("deploy_liteboxd", i.deployLiteBoxd); err != nil {
+		return err
+	}
+	if err := i.runStep("rollout_check", i.rolloutCheck); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (i *Installer) markClusterStepsSkipped(reason string) {
+	for _, step := range []string{
+		"precheck",
+		"configure_registries",
+		"install_master",
+		"install_cilium",
+		"read_k3s_token",
+		"join_agents",
+		"wait_nodes_ready",
+		"install_longhorn",
+	} {
+		_ = i.stateStore.Mark(step, state.StatusDone, reason)
+	}
+	if i.cfg.Runtime.RemoveAbsentAgents {
+		_ = i.stateStore.Mark("reconcile_remove_absent_agents", state.StatusDone, reason)
+	}
 }
 
 func (i *Installer) RemoveNodes(hosts []string, uninstallAgent bool) error {

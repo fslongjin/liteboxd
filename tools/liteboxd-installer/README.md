@@ -14,6 +14,8 @@
 - 支持镜像自定义
 - 支持增量扩容（更新 `cluster.agents` 后重新 `apply`）
 - 支持显式删节点（`node remove`）
+- `cilium/longhorn` 配置未变化时自动跳过 install/upgrade
+- 支持 `--liteboxd-only`（仅部署 LiteBoxd，不执行集群侧安装/升级）
 
 ## 构建
 
@@ -33,6 +35,9 @@ make build-installer
 
 # 仅管理集群（不部署 liteboxd；可包含 Longhorn）
 ./bin/liteboxd-installer -f tools/liteboxd-installer/examples/cluster-only.example.yaml apply --cluster-only
+
+# 仅部署 LiteBoxd（跳过集群侧安装/升级步骤）
+./bin/liteboxd-installer -f tools/liteboxd-installer/examples/install.example.yaml apply --liteboxd-only
 
 # 输出详细执行日志到文件（推荐排障时开启）
 ./bin/liteboxd-installer -f tools/liteboxd-installer/examples/install.example.yaml --log-file /tmp/liteboxd-installer.log apply
@@ -62,5 +67,8 @@ make build-installer
 - 为安全起见，建议使用环境变量注入密码（`${MASTER_PASS}`）
 - `--cluster-only` 模式下可只维护 K3s/Cilium/Longhorn/节点，不执行 LiteBoxd 部署步骤
 - `--cluster-only` 模式可不提供 `liteboxd.configDir` 和 `liteboxd.images`
+- `--liteboxd-only` 模式会跳过 precheck/K3s/Cilium/Longhorn/节点变更，仅执行最小集群连通性检查和 LiteBoxd 部署/rollout
+- `--liteboxd-only` 模式必须提供 `liteboxd.configDir` 与 `liteboxd.images`
+- `--cluster-only` 与 `--liteboxd-only` 互斥，不可同时使用
 - `cluster.k3sInstall.mirror=cn` 时，`network.cilium.version` 必须 `<=1.18.6`
 - 排障时建议加 `--log-file <path>`，会记录每条远端命令及 stdout/stderr（敏感 token 会脱敏）

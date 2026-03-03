@@ -55,8 +55,10 @@ if [ "$INSTALLED" = "1" ] && [ "$CURRENT" = "$DESIRED" ]; then
   exit 0
 fi
 if [ "$INSTALLED" = "1" ]; then
+  echo "cilium_fingerprint_changed_upgrade"
   cilium upgrade --version %s --reuse-values %s
 else
+  echo "cilium_install_required"
   cilium install --version %s %s
 fi
 cilium status --wait
@@ -69,12 +71,20 @@ kubectl -n "$STATE_NS" create configmap "$STATE_CM" --from-literal="$STATE_KEY=$
 	}
 	if strings.Contains(out, "cilium_unchanged_skip") {
 		m.logf("cilium config unchanged, skip install/upgrade")
+		return nil
+	}
+	if strings.Contains(out, "cilium_fingerprint_changed_upgrade") {
+		m.logf("cilium fingerprint changed, run upgrade")
+	}
+	if strings.Contains(out, "cilium_install_required") {
+		m.logf("cilium not installed, run install")
 	}
 	return nil
 }
 
 func ciliumFingerprint(version string, settings []string) string {
-	raw := version + "\n" + strings.Join(settings, "\n")
+	normalizedSettings := canonicalizeSettings(settings)
+	raw := strings.TrimSpace(version) + "\n" + strings.Join(normalizedSettings, "\n")
 	sum := sha256.Sum256([]byte(raw))
 	return hex.EncodeToString(sum[:])
 }

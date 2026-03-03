@@ -61,6 +61,11 @@ if [ "$INSTALLED" = "1" ] && [ "$CURRENT" = "$DESIRED" ]; then
   echo "longhorn_unchanged_skip"
   exit 0
 fi
+if [ "$INSTALLED" = "1" ]; then
+  echo "longhorn_fingerprint_changed_upgrade"
+else
+  echo "longhorn_install_required"
+fi
 helm repo add longhorn %s >/dev/null 2>&1 || true
 helm repo update longhorn >/dev/null
 VERSION_ARG=""
@@ -86,6 +91,13 @@ kubectl -n "$STATE_NS" create configmap "$STATE_CM" --from-literal="$STATE_KEY=$
 	}
 	if strings.Contains(out, "longhorn_unchanged_skip") {
 		m.logf("longhorn config unchanged, skip install/upgrade")
+		return nil
+	}
+	if strings.Contains(out, "longhorn_fingerprint_changed_upgrade") {
+		m.logf("longhorn fingerprint changed, run upgrade")
+	}
+	if strings.Contains(out, "longhorn_install_required") {
+		m.logf("longhorn not installed, run install")
 	}
 	return nil
 }
@@ -202,12 +214,13 @@ func longhornPrerequisitesScript() string {
 }
 
 func longhornFingerprint(namespace, release, chartRepoURL, chartVersion string, settings []string) string {
+	normalizedSettings := canonicalizeSettings(settings)
 	raw := strings.Join([]string{
-		namespace,
-		release,
-		chartRepoURL,
-		chartVersion,
-		strings.Join(settings, "\n"),
+		strings.TrimSpace(namespace),
+		strings.TrimSpace(release),
+		strings.TrimSpace(chartRepoURL),
+		strings.TrimSpace(chartVersion),
+		strings.Join(normalizedSettings, "\n"),
 	}, "\n")
 	sum := sha256.Sum256([]byte(raw))
 	return hex.EncodeToString(sum[:])

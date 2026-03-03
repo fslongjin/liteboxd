@@ -64,6 +64,33 @@ func (i *Installer) rolloutCheck() error {
 	return nil
 }
 
+func (i *Installer) precheckClusterConnectionForLiteBoxd() error {
+	systemNS := i.cfg.LiteBoxd.NamespaceSystem
+	checks := []struct {
+		name string
+		cmd  string
+	}{
+		{
+			name: "kube_apiserver_reachable",
+			cmd:  "KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl cluster-info >/dev/null",
+		},
+		{
+			name: "system_namespace_access",
+			cmd:  fmt.Sprintf("KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl auth can-i create deployments -n %s | grep -q '^yes$'", shellQuote(systemNS)),
+		},
+		{
+			name: "system_namespace_present_or_creatable",
+			cmd:  fmt.Sprintf("KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl get namespace %s >/dev/null 2>&1 || KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl create namespace %s >/dev/null", shellQuote(systemNS), shellQuote(systemNS)),
+		},
+	}
+	for _, check := range checks {
+		if _, err := i.runMaster(check.cmd, true); err != nil {
+			return fmt.Errorf("liteboxd-only precheck %s: %w", check.name, err)
+		}
+	}
+	return nil
+}
+
 func (i *Installer) runMaster(command string, useSudo bool) (string, error) {
 	if i.opts.DryRun {
 		i.logf("dry-run master command: %s", command)

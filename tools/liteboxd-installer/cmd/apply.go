@@ -11,20 +11,26 @@ import (
 
 var applyCmd = &cobra.Command{
 	Use:   "apply",
-	Short: "Install/upgrade cluster and deploy LiteBoxd",
+	Short: "Install/upgrade cluster and/or deploy LiteBoxd",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runApply(false)
 	},
 }
 
 var clusterOnly bool
+var liteboxdOnly bool
 
 func init() {
 	rootCmd.AddCommand(applyCmd)
 	applyCmd.Flags().BoolVar(&clusterOnly, "cluster-only", false, "Only manage K3s/Cilium/Longhorn/nodes; skip LiteBoxd deployment")
+	applyCmd.Flags().BoolVar(&liteboxdOnly, "liteboxd-only", false, "Only deploy LiteBoxd workloads; skip cluster install/upgrade steps")
 }
 
 func runApply(isResume bool) error {
+	if clusterOnly && liteboxdOnly {
+		return fmt.Errorf("--cluster-only and --liteboxd-only are mutually exclusive")
+	}
+
 	cfg, err := config.LoadWithOptions(configFile, config.LoadOptions{
 		RequireLiteBoxd: !clusterOnly,
 	})
@@ -48,10 +54,11 @@ func runApply(isResume bool) error {
 	}
 
 	runner := installer.New(cfg, st, installer.Options{
-		DryRun:      effectiveDryRun,
-		Verbose:     verbose,
-		ClusterOnly: clusterOnly,
-		LogFile:     logFile,
+		DryRun:       effectiveDryRun,
+		Verbose:      verbose,
+		ClusterOnly:  clusterOnly,
+		LiteBoxdOnly: liteboxdOnly,
+		LogFile:      logFile,
 	})
 	return runner.Apply()
 }
