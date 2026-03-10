@@ -18,6 +18,20 @@
             登录沙箱
           </t-button>
           <t-popconfirm
+            v-if="canStopSandbox"
+            content="确定要停止该 Sandbox 吗？停止后可重新启动。"
+            @confirm="stopSandbox"
+          >
+            <t-button theme="warning" variant="outline" :loading="stopping">停止</t-button>
+          </t-popconfirm>
+          <t-popconfirm
+            v-if="canStartSandbox"
+            content="确定要启动该 Sandbox 吗？"
+            @confirm="startSandbox"
+          >
+            <t-button theme="success" variant="outline" :loading="starting">启动</t-button>
+          </t-popconfirm>
+          <t-popconfirm
             v-if="canRestartSandbox"
             content="确定要重启该持久化 Sandbox 吗？"
             @confirm="restartSandbox"
@@ -174,6 +188,8 @@ const lastExitCode = ref<number | null>(null)
 const logs = ref('')
 const events = ref<string[]>([])
 const restarting = ref(false)
+const stopping = ref(false)
+const starting = ref(false)
 
 const uploadPath = ref('')
 const uploadFiles = ref<any[]>([])
@@ -196,6 +212,8 @@ const getStatusTheme = (status: string) => {
       return 'danger'
     case 'terminating':
       return 'warning'
+    case 'stopped':
+      return 'default'
     default:
       return 'default'
   }
@@ -213,6 +231,8 @@ const getStatusText = (status: string) => {
       return '已完成'
     case 'terminating':
       return '正在销毁'
+    case 'stopped':
+      return '已停止'
     default:
       return status
   }
@@ -238,7 +258,17 @@ const formatPersistence = (sb: Sandbox) => {
   return `${mode} / ${size} / ${sc}`
 }
 
-const canRestartSandbox = computed(() => sandbox.value?.persistence?.enabled === true)
+const canRestartSandbox = computed(
+  () => sandbox.value?.persistence?.enabled === true && sandbox.value?.status !== 'stopped'
+)
+
+const canStopSandbox = computed(
+  () => sandbox.value?.persistence?.enabled === true && sandbox.value?.status === 'running'
+)
+
+const canStartSandbox = computed(
+  () => sandbox.value?.persistence?.enabled === true && sandbox.value?.status === 'stopped'
+)
 
 const loadSandbox = async () => {
   loading.value = true
@@ -352,6 +382,33 @@ const downloadFile = async () => {
     MessagePlugin.error('下载失败: ' + (err.response?.data?.error || err.message))
   } finally {
     downloading.value = false
+  }
+}
+
+const stopSandbox = async () => {
+  stopping.value = true
+  try {
+    await sandboxApi.stop(sandboxId)
+    MessagePlugin.success('已触发停止')
+    await loadSandbox()
+  } catch (err: any) {
+    MessagePlugin.error('停止失败: ' + (err.response?.data?.error || err.message))
+  } finally {
+    stopping.value = false
+  }
+}
+
+const startSandbox = async () => {
+  starting.value = true
+  try {
+    await sandboxApi.start(sandboxId)
+    MessagePlugin.success('已触发启动')
+    await loadSandbox()
+    await loadLogs()
+  } catch (err: any) {
+    MessagePlugin.error('启动失败: ' + (err.response?.data?.error || err.message))
+  } finally {
+    starting.value = false
   }
 }
 

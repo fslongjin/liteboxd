@@ -38,6 +38,8 @@ func (h *SandboxHandler) RegisterRoutes(r *gin.RouterGroup) {
 		sandboxes.GET("/:id/status-history", h.GetStatusHistory)
 		sandboxes.DELETE("/:id", h.Delete)
 		sandboxes.POST("/:id/restart", h.Restart)
+		sandboxes.POST("/:id/stop", h.Stop)
+		sandboxes.POST("/:id/start", h.Start)
 		sandboxes.POST("/:id/exec", h.Exec)
 		sandboxes.GET("/:id/exec/interactive", h.ExecInteractive)
 		sandboxes.GET("/:id/logs", h.GetLogs)
@@ -191,6 +193,44 @@ func (h *SandboxHandler) Restart(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "restart requested"})
+}
+
+func (h *SandboxHandler) Stop(c *gin.Context) {
+	id := c.Param("id")
+	if err := h.svc.Stop(c.Request.Context(), id); err != nil {
+		switch {
+		case errors.Is(err, service.ErrSandboxNotFound):
+			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		case errors.Is(err, service.ErrSandboxStopNotSupported):
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		case errors.Is(err, service.ErrSandboxStopInvalidState):
+			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		case errors.Is(err, service.ErrSandboxAlreadyStopped):
+			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		}
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "stop requested"})
+}
+
+func (h *SandboxHandler) Start(c *gin.Context) {
+	id := c.Param("id")
+	if err := h.svc.Start(c.Request.Context(), id); err != nil {
+		switch {
+		case errors.Is(err, service.ErrSandboxNotFound):
+			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		case errors.Is(err, service.ErrSandboxStartNotSupported):
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		case errors.Is(err, service.ErrSandboxNotStopped):
+			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		}
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "start requested"})
 }
 
 func (h *SandboxHandler) GetStatusHistory(c *gin.Context) {

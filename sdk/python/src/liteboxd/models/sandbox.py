@@ -19,6 +19,7 @@ class SandboxStatus(str, Enum):
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     TERMINATING = "terminating"
+    STOPPED = "stopped"
     UNKNOWN = "unknown"
 
 

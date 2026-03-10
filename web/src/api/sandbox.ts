@@ -191,6 +191,10 @@ export const sandboxApi = {
 
   restart: (id: string) => api.post<ActionResponse>(`/sandboxes/${id}/restart`),
 
+  stop: (id: string) => api.post<ActionResponse>(`/sandboxes/${id}/stop`),
+
+  start: (id: string) => api.post<ActionResponse>(`/sandboxes/${id}/start`),
+
   exec: (id: string, data: ExecRequest) => api.post<ExecResponse>(`/sandboxes/${id}/exec`, data),
 
   getLogs: (id: string) => api.get<LogsResponse>(`/sandboxes/${id}/logs`),

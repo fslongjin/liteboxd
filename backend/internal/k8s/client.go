@@ -51,7 +51,7 @@ func (cfg ClientConfig) applyDefaults() ClientConfig {
 }
 
 type Client struct {
-	clientset     *kubernetes.Clientset
+	clientset     kubernetes.Interface
 	dynamicClient dynamic.Interface
 	config        *rest.Config
 	sandboxNS     string

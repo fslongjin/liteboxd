@@ -535,6 +535,9 @@ func (s *SandboxService) Restart(ctx context.Context, id string) error {
 	if record.LifecycleStatus == "terminating" {
 		return ErrSandboxRestartInvalidState
 	}
+	if record.LifecycleStatus == "stopped" {
+		return ErrSandboxRestartInvalidState
+	}
 
 	fromStatus := record.LifecycleStatus
 	if err := s.k8sClient.RestartPersistentSandbox(ctx, id); err != nil {
@@ -549,6 +552,75 @@ func (s *SandboxService) Restart(ctx context.Context, id string) error {
 		return err
 	}
 	_ = s.sandboxStore.AppendStatusHistory(ctx, id, "api", fromStatus, string(model.SandboxStatusPending), "restart requested", nil, now)
+	return nil
+}
+
+func (s *SandboxService) Stop(ctx context.Context, id string) error {
+	record, err := s.sandboxStore.GetByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	if record == nil || record.LifecycleStatus == "deleted" || record.DesiredState == store.DesiredStateDeleted {
+		return ErrSandboxNotFound
+	}
+	if !record.PersistenceEnabled {
+		return ErrSandboxStopNotSupported
+	}
+	if record.LifecycleStatus == "stopped" {
+		return ErrSandboxAlreadyStopped
+	}
+	if record.LifecycleStatus == "terminating" {
+		return ErrSandboxStopInvalidState
+	}
+
+	fromStatus := record.LifecycleStatus
+	if err := s.k8sClient.StopPersistentSandbox(ctx, id); err != nil {
+		if apierrors.IsNotFound(err) {
+			return ErrSandboxNotFound
+		}
+		return err
+	}
+
+	now := time.Now().UTC()
+	if err := s.sandboxStore.SetStopped(ctx, id, now); err != nil {
+		return err
+	}
+	_ = s.sandboxStore.AppendStatusHistory(ctx, id, "api", fromStatus, string(model.SandboxStatusStopped), "stopped by request", nil, now)
+	return nil
+}
+
+func (s *SandboxService) Start(ctx context.Context, id string) error {
+	record, err := s.sandboxStore.GetByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	if record == nil || record.LifecycleStatus == "deleted" || record.DesiredState == store.DesiredStateDeleted {
+		return ErrSandboxNotFound
+	}
+	if !record.PersistenceEnabled {
+		return ErrSandboxStartNotSupported
+	}
+	if record.LifecycleStatus != "stopped" {
+		return ErrSandboxNotStopped
+	}
+
+	if err := s.k8sClient.StartPersistentSandbox(ctx, id); err != nil {
+		if apierrors.IsNotFound(err) {
+			return ErrSandboxNotFound
+		}
+		return err
+	}
+
+	now := time.Now().UTC()
+	newExpiresAt := record.ExpiresAt
+	if record.StoppedAt != nil {
+		stoppedDuration := now.Sub(*record.StoppedAt)
+		newExpiresAt = record.ExpiresAt.Add(stoppedDuration)
+	}
+	if err := s.sandboxStore.SetStarted(ctx, id, newExpiresAt, now); err != nil {
+		return err
+	}
+	_ = s.sandboxStore.AppendStatusHistory(ctx, id, "api", string(model.SandboxStatusStopped), string(model.SandboxStatusPending), "start requested", nil, now)
 	return nil
 }
 
@@ -837,6 +909,8 @@ func parseLifecycleStatus(v string) model.SandboxStatus {
 		return model.SandboxStatusSucceeded
 	case string(model.SandboxStatusFailed):
 		return model.SandboxStatusFailed
+	case string(model.SandboxStatusStopped):
+		return model.SandboxStatusStopped
 	case string(model.SandboxStatusTerminating):
 		return model.SandboxStatusTerminating
 	default:

@@ -322,6 +322,7 @@ func ensureSandboxColumns() error {
 		"volume_reclaim_policy": "TEXT NOT NULL DEFAULT ''",
 		"runtime_kind":          "TEXT NOT NULL DEFAULT 'pod'",
 		"runtime_name":          "TEXT NOT NULL DEFAULT ''",
+		"stopped_at":            "TIMESTAMP",
 	}
 
 	existing := map[string]struct{}{}
