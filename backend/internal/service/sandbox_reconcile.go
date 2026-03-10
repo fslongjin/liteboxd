@@ -98,7 +98,11 @@ func (s *SandboxReconcileService) Run(ctx context.Context, trigger string) (*mod
 					}
 				}
 			default:
-				if rec.LastSeenAt != nil && time.Since(*rec.LastSeenAt) >= s.lostGracePeriod {
+				missingSince := rec.CreatedAt
+				if rec.LastSeenAt != nil {
+					missingSince = *rec.LastSeenAt
+				}
+				if time.Since(missingSince) >= s.lostGracePeriod {
 					if err := s.sandboxStore.UpdateStatus(ctx, rec.ID, "lost", "reconcile: pod missing beyond grace period", time.Now().UTC()); err == nil {
 						fixedCount++
 						action = "mark_lost"

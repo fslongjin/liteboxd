@@ -23,6 +23,8 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 )
 
+const durableStoreWriteTimeout = 5 * time.Second
+
 type SandboxService struct {
 	k8sClient    *k8s.Client
 	templateSvc  *TemplateService
@@ -210,7 +212,7 @@ func (s *SandboxService) Create(ctx context.Context, req *model.CreateSandboxReq
 	if err := s.sandboxStore.Create(ctx, record); err != nil {
 		return nil, err
 	}
-	_ = s.sandboxStore.AppendStatusHistory(ctx, id, "api", "", "creating", "create requested", nil, now)
+	s.appendStatusHistoryDurable(id, "api", "", "creating", "create requested")
 
 	// Convert model.FileSpec to k8s.FileSpec
 	var files []k8s.FileSpec
@@ -289,35 +291,32 @@ func (s *SandboxService) Create(ctx context.Context, req *model.CreateSandboxReq
 			VolumeClaimName:  volumeClaimName,
 		}
 		if _, err := s.k8sClient.CreatePersistentSandbox(ctx, persistentOpts); err != nil {
-			_ = s.sandboxStore.UpdateStatus(ctx, id, string(model.SandboxStatusFailed), err.Error(), time.Now().UTC())
-			_ = s.sandboxStore.AppendStatusHistory(ctx, id, "api", "creating", string(model.SandboxStatusFailed), err.Error(), nil, time.Now().UTC())
+			s.updateStatusDurable(id, string(model.SandboxStatusFailed), err.Error())
+			s.appendStatusHistoryDurable(id, "api", "creating", string(model.SandboxStatusFailed), err.Error())
 			return nil, fmt.Errorf("failed to create persistent sandbox: %w", err)
 		}
-		_ = s.sandboxStore.UpdateStatus(ctx, id, lifecycleStatus, "", time.Now().UTC())
-		_ = s.sandboxStore.AppendStatusHistory(ctx, id, "api", "creating", lifecycleStatus, "deployment created", nil, time.Now().UTC())
+		s.updateStatusDurable(id, lifecycleStatus, "")
+		s.appendStatusHistoryDurable(id, "api", "creating", lifecycleStatus, "deployment created")
 	} else {
 		pod, err := s.k8sClient.CreatePod(ctx, opts)
 		if err != nil {
-			_ = s.sandboxStore.UpdateStatus(ctx, id, string(model.SandboxStatusFailed), err.Error(), time.Now().UTC())
-			_ = s.sandboxStore.AppendStatusHistory(ctx, id, "api", "creating", string(model.SandboxStatusFailed), err.Error(), nil, time.Now().UTC())
+			s.updateStatusDurable(id, string(model.SandboxStatusFailed), err.Error())
+			s.appendStatusHistoryDurable(id, "api", "creating", string(model.SandboxStatusFailed), err.Error())
 			return nil, fmt.Errorf("failed to create pod: %w", err)
 		}
 
 		lifecycleStatus = string(convertPodStatus(pod))
-		if err := s.sandboxStore.UpdateObservedState(
-			ctx,
+		if err := s.updateObservedStateDurable(
 			id,
 			string(pod.UID),
 			string(pod.Status.Phase),
 			pod.Status.PodIP,
 			lifecycleStatus,
 			"",
-			time.Now().UTC(),
-			time.Now().UTC(),
 		); err != nil {
 			return nil, err
 		}
-		_ = s.sandboxStore.AppendStatusHistory(ctx, id, "api", "creating", lifecycleStatus, "pod created", nil, time.Now().UTC())
+		s.appendStatusHistoryDurable(id, "api", "creating", lifecycleStatus, "pod created")
 	}
 
 	// Only apply domain allowlist policy if internet access is enabled
@@ -329,7 +328,8 @@ func (s *SandboxService) Create(ctx context.Context, req *model.CreateSandboxReq
 			} else {
 				_ = s.k8sClient.DeletePod(ctx, id)
 			}
-			_ = s.sandboxStore.UpdateStatus(ctx, id, string(model.SandboxStatusFailed), err.Error(), time.Now().UTC())
+			s.updateStatusDurable(id, string(model.SandboxStatusFailed), err.Error())
+			s.appendStatusHistoryDurable(id, "api", lifecycleStatus, string(model.SandboxStatusFailed), "domain allowlist apply failed")
 			return nil, fmt.Errorf("failed to apply domain allowlist policy: %w", err)
 		}
 	}
@@ -867,4 +867,33 @@ func convertPodStatus(pod *corev1.Pod) model.SandboxStatus {
 func generateID() string {
 	id := uuid.New().String()
 	return id[:8]
+}
+
+func (s *SandboxService) updateStatusDurable(id, status, reason string) {
+	storeCtx, cancel := context.WithTimeout(context.Background(), durableStoreWriteTimeout)
+	defer cancel()
+	_ = s.sandboxStore.UpdateStatus(storeCtx, id, status, reason, time.Now().UTC())
+}
+
+func (s *SandboxService) appendStatusHistoryDurable(id, source, fromStatus, toStatus, reason string) {
+	storeCtx, cancel := context.WithTimeout(context.Background(), durableStoreWriteTimeout)
+	defer cancel()
+	_ = s.sandboxStore.AppendStatusHistory(storeCtx, id, source, fromStatus, toStatus, reason, nil, time.Now().UTC())
+}
+
+func (s *SandboxService) updateObservedStateDurable(id, podUID, podPhase, podIP, lifecycleStatus, reason string) error {
+	storeCtx, cancel := context.WithTimeout(context.Background(), durableStoreWriteTimeout)
+	defer cancel()
+	now := time.Now().UTC()
+	return s.sandboxStore.UpdateObservedState(
+		storeCtx,
+		id,
+		podUID,
+		podPhase,
+		podIP,
+		lifecycleStatus,
+		reason,
+		now,
+		now,
+	)
 }
