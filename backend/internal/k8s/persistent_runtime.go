@@ -338,6 +338,42 @@ func (c *Client) DeletePersistentSandbox(ctx context.Context, sandboxID, claimNa
 	return nil
 }
 
+// StopPersistentSandbox scales the sandbox Deployment replicas to 0.
+func (c *Client) StopPersistentSandbox(ctx context.Context, sandboxID string) error {
+	deployName := fmt.Sprintf("sandbox-%s", sandboxID)
+	deploy, err := c.clientset.AppsV1().Deployments(c.sandboxNS).Get(ctx, deployName, metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return apierrors.NewNotFound(appsv1.Resource("deployments"), deployName)
+		}
+		return fmt.Errorf("failed to get deployment %s: %w", deployName, err)
+	}
+	replicas := int32(0)
+	deploy.Spec.Replicas = &replicas
+	if _, err := c.clientset.AppsV1().Deployments(c.sandboxNS).Update(ctx, deploy, metav1.UpdateOptions{}); err != nil {
+		return fmt.Errorf("failed to scale deployment %s to 0: %w", deployName, err)
+	}
+	return nil
+}
+
+// StartPersistentSandbox scales the sandbox Deployment replicas back to 1.
+func (c *Client) StartPersistentSandbox(ctx context.Context, sandboxID string) error {
+	deployName := fmt.Sprintf("sandbox-%s", sandboxID)
+	deploy, err := c.clientset.AppsV1().Deployments(c.sandboxNS).Get(ctx, deployName, metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return apierrors.NewNotFound(appsv1.Resource("deployments"), deployName)
+		}
+		return fmt.Errorf("failed to get deployment %s: %w", deployName, err)
+	}
+	replicas := int32(1)
+	deploy.Spec.Replicas = &replicas
+	if _, err := c.clientset.AppsV1().Deployments(c.sandboxNS).Update(ctx, deploy, metav1.UpdateOptions{}); err != nil {
+		return fmt.Errorf("failed to scale deployment %s to 1: %w", deployName, err)
+	}
+	return nil
+}
+
 // RestartPersistentSandbox triggers a restart by deleting the current Pod managed by the sandbox Deployment.
 func (c *Client) RestartPersistentSandbox(ctx context.Context, sandboxID string) error {
 	deployName := fmt.Sprintf("sandbox-%s", sandboxID)

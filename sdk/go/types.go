@@ -51,6 +51,7 @@ const (
 	SandboxStatusSucceeded   = model.SandboxStatusSucceeded
 	SandboxStatusFailed      = model.SandboxStatusFailed
 	SandboxStatusTerminating = model.SandboxStatusTerminating
+	SandboxStatusStopped     = model.SandboxStatusStopped
 	SandboxStatusUnknown     = model.SandboxStatusUnknown
 
 	PrepullStatusPending   = model.PrepullStatusPending

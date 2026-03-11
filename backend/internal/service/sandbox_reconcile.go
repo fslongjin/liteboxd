@@ -97,6 +97,9 @@ func (s *SandboxReconcileService) Run(ctx context.Context, trigger string) (*mod
 						action = "mark_deleted"
 					}
 				}
+			case "stopped":
+				// Pod intentionally absent — not drift
+				continue
 			default:
 				missingSince := rec.CreatedAt
 				if rec.LastSeenAt != nil {

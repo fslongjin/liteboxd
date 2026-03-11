@@ -43,12 +43,31 @@
           <t-space>
             <t-link theme="primary" @click="goToDetail(row.id)">详情</t-link>
             <t-popconfirm
+              v-if="canStopSandbox(row)"
+              content="确定要停止该 Sandbox 吗？停止后可重新启动。"
+              @confirm="stopSandbox(row.id)"
+            >
+              <t-link theme="warning">停止</t-link>
+            </t-popconfirm>
+            <t-popconfirm
+              v-if="canStartSandbox(row)"
+              content="确定要启动该 Sandbox 吗？"
+              @confirm="startSandbox(row.id)"
+            >
+              <t-link theme="success">启动</t-link>
+            </t-popconfirm>
+            <t-popconfirm
               v-if="canRestartSandbox(row)"
               content="确定要重启该持久化 Sandbox 吗？"
               @confirm="restartSandbox(row.id)"
             >
               <t-link theme="warning">重启</t-link>
             </t-popconfirm>
+            <span
+              v-else-if="row.persistence?.enabled && row.status === 'stopped'"
+              class="op-disabled"
+              >重启</span
+            >
             <span v-else class="op-disabled">重启</span>
             <t-popconfirm content="确定要删除该 Sandbox 吗？" @confirm="deleteSandbox(row.id)">
               <t-link theme="danger">删除</t-link>
@@ -180,7 +199,7 @@ const columns = [
   { colKey: 'status', title: '状态', width: 100 },
   { colKey: 'created_at', title: '创建时间', width: 180 },
   { colKey: 'expires_at', title: '过期时间', width: 180 },
-  { colKey: 'operation', title: '操作', width: 180 },
+  { colKey: 'operation', title: '操作', width: 260 },
 ]
 
 const filteredTemplates = ref<Template[]>([])
@@ -195,6 +214,8 @@ const getStatusTheme = (status: string) => {
       return 'danger'
     case 'terminating':
       return 'warning'
+    case 'stopped':
+      return 'default'
     default:
       return 'default'
   }
@@ -212,6 +233,8 @@ const getStatusText = (status: string) => {
       return '已完成'
     case 'terminating':
       return '正在销毁'
+    case 'stopped':
+      return '已停止'
     default:
       return status
   }
@@ -369,7 +392,12 @@ const deleteSandbox = async (id: string) => {
   }
 }
 
-const canRestartSandbox = (sb: Sandbox) => sb.persistence?.enabled === true
+const canRestartSandbox = (sb: Sandbox) =>
+  sb.persistence?.enabled === true && sb.status !== 'stopped'
+
+const canStopSandbox = (sb: Sandbox) => sb.persistence?.enabled === true && sb.status === 'running'
+
+const canStartSandbox = (sb: Sandbox) => sb.persistence?.enabled === true && sb.status === 'stopped'
 
 const restartSandbox = async (id: string) => {
   try {
@@ -378,6 +406,26 @@ const restartSandbox = async (id: string) => {
     loadSandboxes()
   } catch (err: any) {
     MessagePlugin.error('重启失败: ' + (err.response?.data?.error || err.message))
+  }
+}
+
+const stopSandbox = async (id: string) => {
+  try {
+    await sandboxApi.stop(id)
+    MessagePlugin.success('已触发停止')
+    loadSandboxes()
+  } catch (err: any) {
+    MessagePlugin.error('停止失败: ' + (err.response?.data?.error || err.message))
+  }
+}
+
+const startSandbox = async (id: string) => {
+  try {
+    await sandboxApi.start(id)
+    MessagePlugin.success('已触发启动')
+    loadSandboxes()
+  } catch (err: any) {
+    MessagePlugin.error('启动失败: ' + (err.response?.data?.error || err.message))
   }
 }
 

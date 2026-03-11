@@ -70,6 +70,18 @@ class AsyncSandboxService:
         """Delete a sandbox."""
         await self._client._delete(f"sandboxes/{sandbox_id}")
 
+    async def restart(self, sandbox_id: str) -> None:
+        """Restart a persistence-enabled sandbox."""
+        await self._client._post(f"sandboxes/{sandbox_id}/restart")
+
+    async def stop(self, sandbox_id: str) -> None:
+        """Stop a persistence-enabled sandbox (scale to zero, preserve data)."""
+        await self._client._post(f"sandboxes/{sandbox_id}/stop")
+
+    async def start(self, sandbox_id: str) -> None:
+        """Start a stopped persistence-enabled sandbox."""
+        await self._client._post(f"sandboxes/{sandbox_id}/start")
+
     async def execute(
         self,
         sandbox_id: str,

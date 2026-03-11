@@ -81,6 +81,16 @@ func (s *SandboxService) Restart(ctx context.Context, id string) error {
 	return s.client.doEmptyResponse(ctx, "POST", s.client.buildPath("sandboxes", id, "restart"), nil, nil)
 }
 
+// Stop stops a persistence-enabled sandbox (scales Deployment to 0).
+func (s *SandboxService) Stop(ctx context.Context, id string) error {
+	return s.client.doEmptyResponse(ctx, "POST", s.client.buildPath("sandboxes", id, "stop"), nil, nil)
+}
+
+// Start starts a stopped persistence-enabled sandbox (scales Deployment back to 1).
+func (s *SandboxService) Start(ctx context.Context, id string) error {
+	return s.client.doEmptyResponse(ctx, "POST", s.client.buildPath("sandboxes", id, "start"), nil, nil)
+}
+
 // Execute runs a command in the sandbox.
 func (s *SandboxService) Execute(ctx context.Context, id string, command []string, timeout int) (*ExecResponse, error) {
 	req := &ExecRequest{

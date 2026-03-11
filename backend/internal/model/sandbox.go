@@ -9,6 +9,7 @@ const (
 	SandboxStatusRunning     SandboxStatus = "running"
 	SandboxStatusSucceeded   SandboxStatus = "succeeded"
 	SandboxStatusFailed      SandboxStatus = "failed"
+	SandboxStatusStopped     SandboxStatus = "stopped"
 	SandboxStatusTerminating SandboxStatus = "terminating"
 	SandboxStatusUnknown     SandboxStatus = "unknown"
 )

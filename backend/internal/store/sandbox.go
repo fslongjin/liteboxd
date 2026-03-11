@@ -50,6 +50,7 @@ type SandboxRecord struct {
 	ExpiresAt             time.Time
 	UpdatedAt             time.Time
 	DeletedAt             *time.Time
+	StoppedAt             *time.Time
 }
 
 func (r *SandboxRecord) EnvMap() map[string]string {
@@ -133,15 +134,15 @@ func (s *SandboxStore) Create(ctx context.Context, rec *SandboxRecord) error {
 			access_token_ciphertext, access_token_nonce, access_token_key_id, access_token_sha256, access_url,
 			persistence_enabled, persistence_mode, persistence_size, storage_class_name, volume_claim_name, volume_reclaim_policy,
 			runtime_kind, runtime_name,
-			created_at, expires_at, updated_at, deleted_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			created_at, expires_at, updated_at, deleted_at, stopped_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, rec.ID, rec.TemplateName, rec.TemplateVersion, rec.Image, rec.CPU, rec.Memory, rec.TTL, rec.EnvJSON,
 		rec.DesiredState, rec.LifecycleStatus, rec.StatusReason,
 		rec.ClusterNamespace, rec.PodName, rec.PodUID, rec.PodPhase, rec.PodIP, toNullTime(rec.LastSeenAt),
 		rec.AccessTokenCiphertext, rec.AccessTokenNonce, rec.AccessTokenKeyID, rec.AccessTokenSHA256, rec.AccessURL,
 		rec.PersistenceEnabled, rec.PersistenceMode, rec.PersistenceSize, rec.StorageClassName, rec.VolumeClaimName, rec.VolumeReclaimPolicy,
 		rec.RuntimeKind, rec.RuntimeName,
-		rec.CreatedAt, rec.ExpiresAt, rec.UpdatedAt, toNullTime(rec.DeletedAt),
+		rec.CreatedAt, rec.ExpiresAt, rec.UpdatedAt, toNullTime(rec.DeletedAt), toNullTime(rec.StoppedAt),
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create sandbox record: %w", err)
@@ -262,9 +263,9 @@ func (s *SandboxStore) ListExpiredActive(ctx context.Context, now time.Time) ([]
 		 WHERE desired_state = ?
 		   AND ttl > 0
 		   AND expires_at <= ?
-		   AND lifecycle_status NOT IN (?, ?)
+		   AND lifecycle_status NOT IN (?, ?, ?)
 		 ORDER BY expires_at ASC
-	`, DesiredStateActive, now, "deleted", "terminating")
+	`, DesiredStateActive, now, "deleted", "terminating", "stopped")
 	if err != nil {
 		return nil, fmt.Errorf("failed to list expired sandboxes: %w", err)
 	}
@@ -304,6 +305,31 @@ func (s *SandboxStore) UpdateStatus(ctx context.Context, id, status, reason stri
 	`, status, reason, now, id)
 	if err != nil {
 		return fmt.Errorf("failed to update status: %w", err)
+	}
+	return nil
+}
+
+func (s *SandboxStore) SetStopped(ctx context.Context, id string, now time.Time) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE sandboxes
+		SET lifecycle_status = ?, status_reason = ?, stopped_at = ?,
+		    pod_phase = '', pod_ip = '', pod_uid = '', updated_at = ?
+		WHERE id = ?
+	`, "stopped", "stopped by request", now, now, id)
+	if err != nil {
+		return fmt.Errorf("failed to set stopped: %w", err)
+	}
+	return nil
+}
+
+func (s *SandboxStore) SetStarted(ctx context.Context, id string, newExpiresAt, now time.Time) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE sandboxes
+		SET lifecycle_status = ?, status_reason = ?, stopped_at = NULL, expires_at = ?, updated_at = ?
+		WHERE id = ?
+	`, "pending", "start requested", newExpiresAt, now, id)
+	if err != nil {
+		return fmt.Errorf("failed to set started: %w", err)
 	}
 	return nil
 }
@@ -571,13 +597,14 @@ SELECT
 	access_token_ciphertext, access_token_nonce, access_token_key_id, access_token_sha256, access_url,
 	persistence_enabled, persistence_mode, persistence_size, storage_class_name, volume_claim_name, volume_reclaim_policy,
 	runtime_kind, runtime_name,
-	created_at, expires_at, updated_at, deleted_at
+	created_at, expires_at, updated_at, deleted_at, stopped_at
 FROM sandboxes`
 
 func scanSandbox(row interface{ Scan(dest ...any) error }) (*SandboxRecord, error) {
 	var rec SandboxRecord
 	var lastSeenAt sql.NullTime
 	var deletedAt sql.NullTime
+	var stoppedAt sql.NullTime
 	if err := row.Scan(
 		&rec.ID, &rec.TemplateName, &rec.TemplateVersion, &rec.Image, &rec.CPU, &rec.Memory, &rec.TTL, &rec.EnvJSON,
 		&rec.DesiredState, &rec.LifecycleStatus, &rec.StatusReason,
@@ -585,7 +612,7 @@ func scanSandbox(row interface{ Scan(dest ...any) error }) (*SandboxRecord, erro
 		&rec.AccessTokenCiphertext, &rec.AccessTokenNonce, &rec.AccessTokenKeyID, &rec.AccessTokenSHA256, &rec.AccessURL,
 		&rec.PersistenceEnabled, &rec.PersistenceMode, &rec.PersistenceSize, &rec.StorageClassName, &rec.VolumeClaimName, &rec.VolumeReclaimPolicy,
 		&rec.RuntimeKind, &rec.RuntimeName,
-		&rec.CreatedAt, &rec.ExpiresAt, &rec.UpdatedAt, &deletedAt,
+		&rec.CreatedAt, &rec.ExpiresAt, &rec.UpdatedAt, &deletedAt, &stoppedAt,
 	); err != nil {
 		return nil, err
 	}
@@ -596,6 +623,10 @@ func scanSandbox(row interface{ Scan(dest ...any) error }) (*SandboxRecord, erro
 	if deletedAt.Valid {
 		t := deletedAt.Time
 		rec.DeletedAt = &t
+	}
+	if stoppedAt.Valid {
+		t := stoppedAt.Time
+		rec.StoppedAt = &t
 	}
 	return &rec, nil
 }

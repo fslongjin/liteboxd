@@ -95,6 +95,33 @@ class SandboxService:
         """
         self._client._delete(f"sandboxes/{sandbox_id}")
 
+    def restart(self, sandbox_id: str) -> None:
+        """
+        Restart a persistence-enabled sandbox.
+
+        Args:
+            sandbox_id: Sandbox ID
+        """
+        self._client._post(f"sandboxes/{sandbox_id}/restart")
+
+    def stop(self, sandbox_id: str) -> None:
+        """
+        Stop a persistence-enabled sandbox (scale to zero, preserve data).
+
+        Args:
+            sandbox_id: Sandbox ID
+        """
+        self._client._post(f"sandboxes/{sandbox_id}/stop")
+
+    def start(self, sandbox_id: str) -> None:
+        """
+        Start a stopped persistence-enabled sandbox.
+
+        Args:
+            sandbox_id: Sandbox ID
+        """
+        self._client._post(f"sandboxes/{sandbox_id}/start")
+
     def execute(
         self,
         sandbox_id: str,

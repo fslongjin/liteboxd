@@ -401,6 +401,269 @@ func TestSandboxStoreListExpiredActiveSkipsTTLZero(t *testing.T) {
 	}
 }
 
+func TestSandboxStoreSetStopped(t *testing.T) {
+	initTestDB(t)
+	ctx := context.Background()
+	s := NewSandboxStore()
+	now := time.Now().UTC()
+
+	rec := &SandboxRecord{
+		ID:                    "stop-1",
+		TemplateName:          "python",
+		TemplateVersion:       1,
+		Image:                 "python:3.11",
+		CPU:                   "500m",
+		Memory:                "512Mi",
+		TTL:                   3600,
+		EnvJSON:               `{}`,
+		DesiredState:          DesiredStateActive,
+		LifecycleStatus:       "running",
+		ClusterNamespace:      "liteboxd-sandbox",
+		PodName:               "sandbox-stop-1",
+		PodUID:                "uid-orig",
+		PodPhase:              "Running",
+		PodIP:                 "10.0.0.1",
+		AccessTokenCiphertext: "cipher",
+		AccessTokenNonce:      "nonce",
+		AccessTokenKeyID:      "v1",
+		AccessTokenSHA256:     "hash",
+		AccessURL:             "http://gateway/stop-1",
+		PersistenceEnabled:    true,
+		CreatedAt:             now,
+		ExpiresAt:             now.Add(time.Hour),
+		UpdatedAt:             now,
+	}
+	if err := s.Create(ctx, rec); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	stopTime := now.Add(10 * time.Minute)
+	if err := s.SetStopped(ctx, rec.ID, stopTime); err != nil {
+		t.Fatalf("SetStopped() error = %v", err)
+	}
+
+	got, err := s.GetByID(ctx, rec.ID)
+	if err != nil {
+		t.Fatalf("GetByID() error = %v", err)
+	}
+	if got.LifecycleStatus != "stopped" {
+		t.Fatalf("LifecycleStatus = %q, want %q", got.LifecycleStatus, "stopped")
+	}
+	if got.StatusReason != "stopped by request" {
+		t.Fatalf("StatusReason = %q, want %q", got.StatusReason, "stopped by request")
+	}
+	if got.PodPhase != "" {
+		t.Fatalf("PodPhase = %q, want empty", got.PodPhase)
+	}
+	if got.PodIP != "" {
+		t.Fatalf("PodIP = %q, want empty", got.PodIP)
+	}
+	if got.PodUID != "" {
+		t.Fatalf("PodUID = %q, want empty", got.PodUID)
+	}
+	if got.StoppedAt == nil {
+		t.Fatalf("StoppedAt is nil, want non-nil")
+	}
+	if got.StoppedAt.Sub(stopTime).Abs() > time.Second {
+		t.Fatalf("StoppedAt = %v, want ~%v", *got.StoppedAt, stopTime)
+	}
+}
+
+func TestSandboxStoreSetStarted(t *testing.T) {
+	initTestDB(t)
+	ctx := context.Background()
+	s := NewSandboxStore()
+	now := time.Now().UTC()
+
+	originalExpires := now.Add(time.Hour)
+	rec := &SandboxRecord{
+		ID:                    "start-1",
+		TemplateName:          "python",
+		TemplateVersion:       1,
+		Image:                 "python:3.11",
+		CPU:                   "500m",
+		Memory:                "512Mi",
+		TTL:                   3600,
+		EnvJSON:               `{}`,
+		DesiredState:          DesiredStateActive,
+		LifecycleStatus:       "running",
+		ClusterNamespace:      "liteboxd-sandbox",
+		PodName:               "sandbox-start-1",
+		AccessTokenCiphertext: "cipher",
+		AccessTokenNonce:      "nonce",
+		AccessTokenKeyID:      "v1",
+		AccessTokenSHA256:     "hash",
+		AccessURL:             "http://gateway/start-1",
+		PersistenceEnabled:    true,
+		CreatedAt:             now,
+		ExpiresAt:             originalExpires,
+		UpdatedAt:             now,
+	}
+	if err := s.Create(ctx, rec); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	stopTime := now.Add(10 * time.Minute)
+	if err := s.SetStopped(ctx, rec.ID, stopTime); err != nil {
+		t.Fatalf("SetStopped() error = %v", err)
+	}
+
+	startTime := now.Add(40 * time.Minute)
+	newExpires := originalExpires.Add(30 * time.Minute)
+	if err := s.SetStarted(ctx, rec.ID, newExpires, startTime); err != nil {
+		t.Fatalf("SetStarted() error = %v", err)
+	}
+
+	got, err := s.GetByID(ctx, rec.ID)
+	if err != nil {
+		t.Fatalf("GetByID() error = %v", err)
+	}
+	if got.LifecycleStatus != "pending" {
+		t.Fatalf("LifecycleStatus = %q, want %q", got.LifecycleStatus, "pending")
+	}
+	if got.StatusReason != "start requested" {
+		t.Fatalf("StatusReason = %q, want %q", got.StatusReason, "start requested")
+	}
+	if got.StoppedAt != nil {
+		t.Fatalf("StoppedAt = %v, want nil", got.StoppedAt)
+	}
+	if got.ExpiresAt.Sub(newExpires).Abs() > time.Second {
+		t.Fatalf("ExpiresAt = %v, want ~%v", got.ExpiresAt, newExpires)
+	}
+}
+
+func TestSandboxStoreListExpiredActiveExcludesStopped(t *testing.T) {
+	initTestDB(t)
+	ctx := context.Background()
+	s := NewSandboxStore()
+	now := time.Now().UTC()
+
+	mk := func(id, lifecycle string) *SandboxRecord {
+		return &SandboxRecord{
+			ID:                    id,
+			TemplateName:          "python",
+			TemplateVersion:       1,
+			Image:                 "python:3.11",
+			CPU:                   "500m",
+			Memory:                "512Mi",
+			TTL:                   300,
+			EnvJSON:               `{}`,
+			DesiredState:          DesiredStateActive,
+			LifecycleStatus:       lifecycle,
+			ClusterNamespace:      "liteboxd-sandbox",
+			PodName:               "sandbox-" + id,
+			AccessTokenCiphertext: "cipher",
+			AccessTokenNonce:      "nonce",
+			AccessTokenKeyID:      "v1",
+			AccessTokenSHA256:     "hash",
+			AccessURL:             "http://gateway/" + id,
+			PersistenceEnabled:    true,
+			CreatedAt:             now.Add(-time.Hour),
+			ExpiresAt:             now.Add(-10 * time.Minute),
+			UpdatedAt:             now.Add(-time.Hour),
+		}
+	}
+
+	if err := s.Create(ctx, mk("exp-running", "running")); err != nil {
+		t.Fatalf("Create running error = %v", err)
+	}
+	if err := s.Create(ctx, mk("exp-stopped", "stopped")); err != nil {
+		t.Fatalf("Create stopped error = %v", err)
+	}
+
+	expired, err := s.ListExpiredActive(ctx, now)
+	if err != nil {
+		t.Fatalf("ListExpiredActive error = %v", err)
+	}
+	if len(expired) != 1 {
+		t.Fatalf("ListExpiredActive len = %d, want 1", len(expired))
+	}
+	if expired[0].ID != "exp-running" {
+		t.Fatalf("expired sandbox = %s, want exp-running", expired[0].ID)
+	}
+}
+
+func TestSandboxStoreStoppedAtRoundTrip(t *testing.T) {
+	initTestDB(t)
+	ctx := context.Background()
+	s := NewSandboxStore()
+	now := time.Now().UTC()
+
+	stoppedAt := now.Add(-5 * time.Minute)
+	rec := &SandboxRecord{
+		ID:                    "rt-1",
+		TemplateName:          "python",
+		TemplateVersion:       1,
+		Image:                 "python:3.11",
+		CPU:                   "500m",
+		Memory:                "512Mi",
+		TTL:                   3600,
+		EnvJSON:               `{}`,
+		DesiredState:          DesiredStateActive,
+		LifecycleStatus:       "stopped",
+		ClusterNamespace:      "liteboxd-sandbox",
+		PodName:               "sandbox-rt-1",
+		AccessTokenCiphertext: "cipher",
+		AccessTokenNonce:      "nonce",
+		AccessTokenKeyID:      "v1",
+		AccessTokenSHA256:     "hash",
+		AccessURL:             "http://gateway/rt-1",
+		PersistenceEnabled:    true,
+		CreatedAt:             now,
+		ExpiresAt:             now.Add(time.Hour),
+		UpdatedAt:             now,
+		StoppedAt:             &stoppedAt,
+	}
+	if err := s.Create(ctx, rec); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	got, err := s.GetByID(ctx, rec.ID)
+	if err != nil {
+		t.Fatalf("GetByID() error = %v", err)
+	}
+	if got.StoppedAt == nil {
+		t.Fatalf("StoppedAt is nil, want non-nil")
+	}
+	if got.StoppedAt.Sub(stoppedAt).Abs() > time.Second {
+		t.Fatalf("StoppedAt = %v, want ~%v", *got.StoppedAt, stoppedAt)
+	}
+
+	// Verify nil StoppedAt also round-trips correctly
+	rec2 := &SandboxRecord{
+		ID:                    "rt-2",
+		TemplateName:          "python",
+		TemplateVersion:       1,
+		Image:                 "python:3.11",
+		CPU:                   "500m",
+		Memory:                "512Mi",
+		TTL:                   3600,
+		EnvJSON:               `{}`,
+		DesiredState:          DesiredStateActive,
+		LifecycleStatus:       "running",
+		ClusterNamespace:      "liteboxd-sandbox",
+		PodName:               "sandbox-rt-2",
+		AccessTokenCiphertext: "cipher",
+		AccessTokenNonce:      "nonce",
+		AccessTokenKeyID:      "v1",
+		AccessTokenSHA256:     "hash",
+		AccessURL:             "http://gateway/rt-2",
+		CreatedAt:             now,
+		ExpiresAt:             now.Add(time.Hour),
+		UpdatedAt:             now,
+	}
+	if err := s.Create(ctx, rec2); err != nil {
+		t.Fatalf("Create() rec2 error = %v", err)
+	}
+	got2, err := s.GetByID(ctx, rec2.ID)
+	if err != nil {
+		t.Fatalf("GetByID() rec2 error = %v", err)
+	}
+	if got2.StoppedAt != nil {
+		t.Fatalf("StoppedAt = %v, want nil", got2.StoppedAt)
+	}
+}
+
 func TestSandboxStoreListStatusHistory(t *testing.T) {
 	initTestDB(t)
 	ctx := context.Background()

@@ -93,6 +93,24 @@ var sandboxRestartCmd = &cobra.Command{
 	RunE: runSandboxRestart,
 }
 
+var sandboxStopCmd = &cobra.Command{
+	Use:   "stop <id>",
+	Short: "Stop a persistence-enabled sandbox",
+	Args:  cobra.ExactArgs(1),
+	Example: `  # Stop a running persistent sandbox
+  liteboxd sandbox stop <sandbox-id>`,
+	RunE: runSandboxStop,
+}
+
+var sandboxStartCmd = &cobra.Command{
+	Use:   "start <id>",
+	Short: "Start a stopped persistence-enabled sandbox",
+	Args:  cobra.ExactArgs(1),
+	Example: `  # Start a stopped persistent sandbox
+  liteboxd sandbox start <sandbox-id>`,
+	RunE: runSandboxStart,
+}
+
 var (
 	execTimeout     int
 	exitCodeFlag    bool
@@ -198,6 +216,12 @@ func init() {
 
 	// Restart command
 	sandboxCmd.AddCommand(sandboxRestartCmd)
+
+	// Stop command
+	sandboxCmd.AddCommand(sandboxStopCmd)
+
+	// Start command
+	sandboxCmd.AddCommand(sandboxStartCmd)
 
 	// Exec command
 	sandboxExecCmd.Flags().IntVar(&execTimeout, "timeout", 30, "Execution timeout in seconds")
@@ -347,6 +371,32 @@ func runSandboxRestart(cmd *cobra.Command, args []string) error {
 	}
 
 	fmt.Printf("Restart requested: %s\n", id)
+	return nil
+}
+
+func runSandboxStop(cmd *cobra.Command, args []string) error {
+	client := getAPIClient()
+	ctx, _ := getContext()
+
+	id := args[0]
+	if err := client.Sandbox.Stop(ctx, id); err != nil {
+		return err
+	}
+
+	fmt.Printf("Stop requested: %s\n", id)
+	return nil
+}
+
+func runSandboxStart(cmd *cobra.Command, args []string) error {
+	client := getAPIClient()
+	ctx, _ := getContext()
+
+	id := args[0]
+	if err := client.Sandbox.Start(ctx, id); err != nil {
+		return err
+	}
+
+	fmt.Printf("Start requested: %s\n", id)
 	return nil
 }
 
