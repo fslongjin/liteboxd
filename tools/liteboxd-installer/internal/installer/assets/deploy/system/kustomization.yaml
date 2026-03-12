@@ -4,6 +4,7 @@ namespace: liteboxd-system
 resources:
   - namespace.yaml
   - configmap.yaml
+  - auth-secret.yaml
   - serviceaccounts.yaml
   - rbac-cluster.yaml
   - traefik-middleware-retry.yaml

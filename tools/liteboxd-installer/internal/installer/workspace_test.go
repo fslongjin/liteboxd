@@ -24,6 +24,8 @@ func TestSystemOverlayKustomizationIncludesSecurityConfigPatch(t *testing.T) {
 				Security: config.SecurityConfig{
 					SandboxTokenEncryptionKey:   "my-secret-key",
 					SandboxTokenEncryptionKeyID: "v2",
+					AdminUsername:               "root-admin",
+					AdminInitialPassword:        "init#pass:123",
 				},
 			},
 		},
@@ -42,6 +44,21 @@ func TestSystemOverlayKustomizationIncludesSecurityConfigPatch(t *testing.T) {
 	}
 	if !strings.Contains(out, "value: v2") {
 		t.Fatalf("expected security key id patch value in kustomization")
+	}
+	if !strings.Contains(out, "kind: Secret\n      name: liteboxd-auth") {
+		t.Fatalf("expected auth secret patch target in kustomization")
+	}
+	if !strings.Contains(out, "/stringData/ADMIN_USERNAME") {
+		t.Fatalf("expected admin username patch path in kustomization")
+	}
+	if !strings.Contains(out, "value: \"root-admin\"") {
+		t.Fatalf("expected admin username patch value in kustomization")
+	}
+	if !strings.Contains(out, "/stringData/ADMIN_INITIAL_PASSWORD") {
+		t.Fatalf("expected admin initial password patch path in kustomization")
+	}
+	if !strings.Contains(out, "value: \"init#pass:123\"") {
+		t.Fatalf("expected admin initial password patch value in kustomization")
 	}
 }
 

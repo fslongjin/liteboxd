@@ -65,6 +65,8 @@ func (i *Installer) systemOverlayKustomization() string {
 	retentionDays := i.cfg.LiteBoxd.MetadataRetentionDays
 	tokenKey := strings.TrimSpace(i.cfg.LiteBoxd.Security.SandboxTokenEncryptionKey)
 	tokenKeyID := strings.TrimSpace(i.cfg.LiteBoxd.Security.SandboxTokenEncryptionKeyID)
+	adminUsername := strings.TrimSpace(i.cfg.LiteBoxd.Security.AdminUsername)
+	adminInitialPassword := strings.TrimSpace(i.cfg.LiteBoxd.Security.AdminInitialPassword)
 
 	var b strings.Builder
 	b.WriteString("apiVersion: kustomize.config.k8s.io/v1beta1\n")
@@ -82,6 +84,15 @@ func (i *Installer) systemOverlayKustomization() string {
 	if tokenKeyID != "" {
 		b.WriteString("      - op: replace\n        path: /data/SANDBOX_TOKEN_ENCRYPTION_KEY_ID\n        value: " + tokenKeyID + "\n")
 	}
+	if adminUsername != "" || adminInitialPassword != "" {
+		b.WriteString("  - target:\n      kind: Secret\n      name: liteboxd-auth\n    patch: |-\n")
+		if adminUsername != "" {
+			b.WriteString("      - op: replace\n        path: /stringData/ADMIN_USERNAME\n        value: " + yamlQuoted(adminUsername) + "\n")
+		}
+		if adminInitialPassword != "" {
+			b.WriteString("      - op: replace\n        path: /stringData/ADMIN_INITIAL_PASSWORD\n        value: " + yamlQuoted(adminInitialPassword) + "\n")
+		}
+	}
 	b.WriteString("  - target:\n      kind: Ingress\n      name: liteboxd\n    patch: |-\n      - op: replace\n        path: /spec/rules/0/host\n        value: " + i.cfg.LiteBoxd.GatewayIngressHost + "\n      - op: replace\n        path: /spec/rules/1/host\n        value: " + i.cfg.LiteBoxd.IngressHost + "\n")
 	b.WriteString("  - target:\n      kind: Deployment\n      name: liteboxd-api\n    patch: |-\n      - op: replace\n        path: /spec/template/spec/containers/0/image\n        value: " + i.cfg.LiteBoxd.Images.API + "\n")
 	b.WriteString("  - target:\n      kind: Deployment\n      name: liteboxd-gateway\n    patch: |-\n      - op: replace\n        path: /spec/template/spec/containers/0/image\n        value: " + i.cfg.LiteBoxd.Images.Gateway + "\n")
@@ -91,6 +102,10 @@ func (i *Installer) systemOverlayKustomization() string {
 		b.WriteString("  - path: ../config/system/patches/" + filepath.Base(p) + "\n")
 	}
 	return b.String()
+}
+
+func yamlQuoted(v string) string {
+	return strconv.Quote(v)
 }
 
 func (i *Installer) sandboxOverlayKustomization() string {
