@@ -66,6 +66,8 @@ liteboxd:
   security:
     sandboxTokenEncryptionKey: "${SANDBOX_TOKEN_KEY}"
     sandboxTokenEncryptionKeyID: "v1"
+    adminUsername: "admin"
+    adminInitialPassword: "${LITEBOXD_ADMIN_INITIAL_PASSWORD}"
   configDir: "./deploy-config/prod"
   images:
     api: "registry.example.com/liteboxd/liteboxd-server:v0.5.0"

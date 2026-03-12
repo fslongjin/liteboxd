@@ -32,6 +32,16 @@ spec:
                 configMapKeyRef:
                   name: liteboxd-config
                   key: API_PORT
+            - name: ADMIN_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: liteboxd-auth
+                  key: ADMIN_USERNAME
+            - name: ADMIN_INITIAL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: liteboxd-auth
+                  key: ADMIN_INITIAL_PASSWORD
             - name: DATA_DIR
               value: /app/data
             - name: SANDBOX_NAMESPACE

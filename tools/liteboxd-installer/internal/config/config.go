@@ -104,6 +104,8 @@ type LiteBoxdConfig struct {
 type SecurityConfig struct {
 	SandboxTokenEncryptionKey   string `yaml:"sandboxTokenEncryptionKey"`
 	SandboxTokenEncryptionKeyID string `yaml:"sandboxTokenEncryptionKeyID"`
+	AdminUsername               string `yaml:"adminUsername"`
+	AdminInitialPassword        string `yaml:"adminInitialPassword"`
 }
 
 type ImageConfig struct {
@@ -244,6 +246,9 @@ func (c *Config) setDefaults(configPath string) {
 	}
 	if c.LiteBoxd.Security.SandboxTokenEncryptionKeyID == "" {
 		c.LiteBoxd.Security.SandboxTokenEncryptionKeyID = "v1"
+	}
+	if c.LiteBoxd.Security.AdminUsername == "" {
+		c.LiteBoxd.Security.AdminUsername = "admin"
 	}
 
 	if c.Runtime.Parallelism <= 0 {

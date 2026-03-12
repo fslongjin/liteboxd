@@ -12,11 +12,12 @@ import (
 )
 
 const (
-	AdminUsernameEnv = "ADMIN_USERNAME"
-	AdminPasswordEnv = "ADMIN_PASSWORD"
-	defaultAdminUser = "admin"
-	defaultAdminPass = "liteboxd-admin"
-	bcryptCost       = 12
+	AdminUsernameEnv        = "ADMIN_USERNAME"
+	AdminPasswordEnv        = "ADMIN_PASSWORD"
+	AdminInitialPasswordEnv = "ADMIN_INITIAL_PASSWORD"
+	defaultAdminUser        = "admin"
+	defaultAdminPass        = "liteboxd-admin"
+	bcryptCost              = 12
 )
 
 // EnsureAdmin checks if an admin user exists. If not, creates one from env vars.
@@ -27,6 +28,7 @@ func EnsureAdmin(ctx context.Context, authStore *store.AuthStore) error {
 		username = defaultAdminUser
 	}
 	password := os.Getenv(AdminPasswordEnv)
+	initialPassword := os.Getenv(AdminInitialPasswordEnv)
 
 	count, err := authStore.AdminCount(ctx)
 	if err != nil {
@@ -35,10 +37,14 @@ func EnsureAdmin(ctx context.Context, authStore *store.AuthStore) error {
 
 	if count == 0 {
 		// No admin exists — create one
-		if password == "" {
-			password = defaultAdminPass
+		createPassword := initialPassword
+		if createPassword == "" {
+			createPassword = password
 		}
-		hash, err := bcrypt.GenerateFromPassword([]byte(password), bcryptCost)
+		if createPassword == "" {
+			createPassword = defaultAdminPass
+		}
+		hash, err := bcrypt.GenerateFromPassword([]byte(createPassword), bcryptCost)
 		if err != nil {
 			return fmt.Errorf("failed to hash admin password: %w", err)
 		}
