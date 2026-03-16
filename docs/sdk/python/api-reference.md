@@ -459,6 +459,8 @@ class Sandbox(BaseModel):
     ttl: int
     env: Optional[dict[str, str]]
     status: SandboxStatus
+    lifecycle_status: Optional[str]
+    status_reason: Optional[str]
     template: Optional[str]
     template_version: Optional[int]
     created_at: datetime
@@ -478,6 +480,8 @@ class SandboxStatus(str, Enum):
     TERMINATING = "terminating"
     UNKNOWN = "unknown"
 ```
+
+`status_reason` will contain detailed startup or storage failure information for persistent sandboxes.
 
 ### SandboxOverrides
 
