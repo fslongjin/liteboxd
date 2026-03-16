@@ -296,6 +296,8 @@ func (s *SandboxService) Create(ctx context.Context, req *model.CreateSandboxReq
 			return nil, fmt.Errorf("failed to create persistent sandbox: %w", err)
 		}
 		s.updateStatusDurable(id, lifecycleStatus, "")
+		record.LifecycleStatus = lifecycleStatus
+		record.StatusReason = ""
 		s.appendStatusHistoryDurable(id, "api", "creating", lifecycleStatus, "deployment created")
 	} else {
 		pod, err := s.k8sClient.CreatePod(ctx, opts)
@@ -344,7 +346,7 @@ func (s *SandboxService) Create(ctx context.Context, req *model.CreateSandboxReq
 	// Run post-creation tasks asynchronously (wait for ready, upload files, exec startup script)
 	bgCtx := logx.WithRequestID(context.Background(), logx.RequestIDFromContext(ctx))
 	go func() {
-		s.runPostCreationTasks(bgCtx, id, probe, files, startupScript, startupTimeout)
+		s.runPostCreationTasks(bgCtx, id, probe, files, startupScript, startupTimeout, persistenceEnabled, runtimeName, volumeClaimName)
 	}()
 
 	return sandbox, nil
@@ -352,8 +354,8 @@ func (s *SandboxService) Create(ctx context.Context, req *model.CreateSandboxReq
 
 // runPostCreationTasks runs tasks after pod creation in the background.
 // Order: startup script first (so services like nginx can listen), then wait for ready (probe), then upload files.
-func (s *SandboxService) runPostCreationTasks(ctx context.Context, id string, probe *k8s.ProbeSpec, files []k8s.FileSpec, startupScript string, startupTimeout int) {
-	logger := logx.LoggerWithRequestID(ctx).With("component", "sandbox_service", "sandbox_id", id)
+func (s *SandboxService) runPostCreationTasks(ctx context.Context, id string, probe *k8s.ProbeSpec, files []k8s.FileSpec, startupScript string, startupTimeout int, persistent bool, deploymentName, pvcName string) {
+	logger := logWithSandboxID(ctx, id)
 
 	// Execute startup script first if specified (e.g. start nginx), so readiness probe can succeed
 	if startupScript != "" {
@@ -364,19 +366,25 @@ func (s *SandboxService) runPostCreationTasks(ctx context.Context, id string, pr
 		}
 	}
 
-	// Wait for pod to be ready (with custom probe if specified)
-	readyCtx, cancel := context.WithTimeout(ctx, time.Duration(startupTimeout)*time.Second)
-	defer cancel()
-	if err := s.k8sClient.WaitForReady(readyCtx, id, probe); err != nil {
-		// Pod created but not ready - log the error and update metadata state
-		logger.Warn("post-creation pod not ready", "error", err)
-		_ = s.sandboxStore.UpdateStatus(context.Background(), id, string(model.SandboxStatusFailed), "startup/readiness failed", time.Now().UTC())
-		_ = s.sandboxStore.AppendStatusHistory(context.Background(), id, "system", "pending", string(model.SandboxStatusFailed), "startup/readiness failed", nil, time.Now().UTC())
-		return
-	}
+	if persistent {
+		if !s.runPersistentStartupMonitor(ctx, id, deploymentName, pvcName, startupTimeout) {
+			return
+		}
+	} else {
+		// Wait for pod to be ready (with custom probe if specified)
+		readyCtx, cancel := context.WithTimeout(ctx, time.Duration(startupTimeout)*time.Second)
+		defer cancel()
+		if err := s.k8sClient.WaitForReady(readyCtx, id, probe); err != nil {
+			// Pod created but not ready - log the error and update metadata state
+			logger.Warn("post-creation pod not ready", "error", err)
+			_ = s.sandboxStore.UpdateStatus(context.Background(), id, string(model.SandboxStatusFailed), "startup/readiness failed", time.Now().UTC())
+			_ = s.sandboxStore.AppendStatusHistory(context.Background(), id, "system", "pending", string(model.SandboxStatusFailed), "startup/readiness failed", nil, time.Now().UTC())
+			return
+		}
 
-	_ = s.sandboxStore.UpdateStatus(context.Background(), id, string(model.SandboxStatusRunning), "", time.Now().UTC())
-	_ = s.sandboxStore.AppendStatusHistory(context.Background(), id, "system", "pending", string(model.SandboxStatusRunning), "sandbox is ready", nil, time.Now().UTC())
+		_ = s.sandboxStore.UpdateStatus(context.Background(), id, string(model.SandboxStatusRunning), "", time.Now().UTC())
+		_ = s.sandboxStore.AppendStatusHistory(context.Background(), id, "system", "pending", string(model.SandboxStatusRunning), "sandbox is ready", nil, time.Now().UTC())
+	}
 
 	// Upload files if specified
 	if len(files) > 0 {
@@ -659,9 +667,18 @@ func (s *SandboxService) GetLogs(ctx context.Context, id string, tailLines int64
 		logs = ""
 	}
 
-	events, err := s.k8sClient.GetPodEvents(ctx, id)
-	if err != nil {
-		events = nil
+	record, recErr := s.sandboxStore.GetByID(ctx, id)
+	events := []string(nil)
+	if recErr == nil && record != nil && record.PersistenceEnabled {
+		events, err = s.k8sClient.GetSandboxEvents(ctx, id, record.RuntimeName, record.VolumeClaimName)
+		if err != nil {
+			events = nil
+		}
+	} else {
+		events, err = s.k8sClient.GetPodEvents(ctx, id)
+		if err != nil {
+			events = nil
+		}
 	}
 
 	return &model.LogsResponse{

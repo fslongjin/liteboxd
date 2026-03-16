@@ -110,7 +110,7 @@ print(content.decode())
 ```python
 logs = client.sandbox.get_logs(sandbox.id)
 print(f"Container logs:\n{logs.logs}")
-print(f"Events:\n{logs.events}")
+print(f"Events:\n{logs.events}")  # persistent sandboxes may include PVC/Deployment/Pod events
 ```
 
 ### 7. 清理

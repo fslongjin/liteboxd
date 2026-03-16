@@ -1108,7 +1108,7 @@ components:
           example: "running"
         status_reason:
           type: string
-          description: Reason for current lifecycle status
+          description: Reason for current lifecycle status, including detailed storage/startup failures for persistent sandboxes
         pod_phase:
           type: string
           description: Observed pod phase in Kubernetes
@@ -1474,10 +1474,10 @@ components:
           type: array
           items:
             type: string
-          description: Pod events in format "[Type] Reason: Message"
+          description: Runtime events in format "[Kind][Type] Reason: Message"; persistent sandboxes may include PVC, Deployment and Pod events
           example:
-            - "[Normal] Scheduled: Successfully assigned liteboxd/sandbox-a1b2c3d4 to node1"
-            - "[Normal] Pulled: Container image \"python:3.11-slim\" already present on machine"
+            - "[Pod][Normal] Scheduled: Successfully assigned liteboxd/sandbox-a1b2c3d4 to node1"
+            - "[PVC][Warning] ProvisioningFailed: No available disk candidates to create a new replica"
 
     UploadResponse:
       type: object

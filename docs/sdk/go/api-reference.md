@@ -166,7 +166,8 @@ fmt.Printf("Stdout: %s\n", resp.Stdout)
 ### GetLogs
 
 ```go
-// GetLogs retrieves container logs and Pod events
+// GetLogs retrieves container logs and runtime events.
+// For persistence-enabled sandboxes, events can include PVC/Deployment/Pod warnings.
 func (s *SandboxService) GetLogs(ctx context.Context, id string) (*model.LogsResponse, error)
 ```
 

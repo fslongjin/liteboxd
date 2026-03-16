@@ -1,0 +1,194 @@
+package service
+
+import (
+	"context"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/fslongjin/liteboxd/backend/internal/k8s"
+	"github.com/fslongjin/liteboxd/backend/internal/store"
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
+)
+
+func persistentRecord(id, lifecycle, reason string) *store.SandboxRecord {
+	rec := makeTestSandboxRecord(id, true, lifecycle)
+	rec.RuntimeName = "sandbox-" + id
+	rec.VolumeClaimName = "sandbox-data-" + id
+	rec.StatusReason = reason
+	return rec
+}
+
+func persistentObjects(id string, podPhase corev1.PodPhase, ready bool) []runtime.Object {
+	replicas := int32(1)
+	conditionStatus := corev1.ConditionFalse
+	if ready {
+		conditionStatus = corev1.ConditionTrue
+	}
+	deploy := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "sandbox-" + id, Namespace: k8s.DefaultSandboxNamespace},
+		Spec: appsv1.DeploymentSpec{
+			Replicas: &replicas,
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{
+				"app":              k8s.LabelApp,
+				k8s.LabelSandboxID: id,
+			}},
+		},
+	}
+	pvcPhase := corev1.ClaimPending
+	if ready {
+		pvcPhase = corev1.ClaimBound
+	}
+	pvc := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{Name: "sandbox-data-" + id, Namespace: k8s.DefaultSandboxNamespace},
+		Status:     corev1.PersistentVolumeClaimStatus{Phase: pvcPhase},
+	}
+	objects := []runtime.Object{deploy, pvc}
+	if podPhase != "" {
+		objects = append(objects, &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "sandbox-" + id,
+				Namespace: k8s.DefaultSandboxNamespace,
+				UID:       types.UID("uid-" + id),
+				Labels: map[string]string{
+					"app":              k8s.LabelApp,
+					k8s.LabelSandboxID: id,
+				},
+			},
+			Status: corev1.PodStatus{
+				Phase: podPhase,
+				PodIP: "10.0.0.9",
+				Conditions: []corev1.PodCondition{
+					{Type: corev1.PodReady, Status: conditionStatus},
+				},
+			},
+		})
+	}
+	return objects
+}
+
+func pvcEvent(id, message string) runtime.Object {
+	return &corev1.Event{
+		ObjectMeta: metav1.ObjectMeta{Name: "pvc-fail-" + id, Namespace: k8s.DefaultSandboxNamespace},
+		InvolvedObject: corev1.ObjectReference{
+			Kind:      "PersistentVolumeClaim",
+			Name:      "sandbox-data-" + id,
+			Namespace: k8s.DefaultSandboxNamespace,
+		},
+		Type:          corev1.EventTypeWarning,
+		Reason:        "ProvisioningFailed",
+		Message:       message,
+		LastTimestamp: metav1.NewTime(time.Now().UTC()),
+	}
+}
+
+func TestReconcilePersistentFailedDoesNotRegressToPending(t *testing.T) {
+	initServiceTestDB(t)
+	ctx := context.Background()
+	sandboxStore := store.NewSandboxStore()
+	now := time.Now().UTC()
+
+	rec := persistentRecord("recon-failed", "failed", "storage provisioning failed: No available disk candidates")
+	rec.LastSeenAt = &now
+	if err := sandboxStore.Create(ctx, rec); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	objects := append(
+		persistentObjects("recon-failed", corev1.PodPending, false),
+		pvcEvent("recon-failed", "No available disk candidates to create a new replica"),
+	)
+	client := k8s.NewClientForTest(objects...)
+
+	svc := NewSandboxReconcileService(client, sandboxStore)
+	if _, err := svc.Run(ctx, "manual"); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	got, err := sandboxStore.GetByID(ctx, "recon-failed")
+	if err != nil {
+		t.Fatalf("GetByID() error = %v", err)
+	}
+	if got.LifecycleStatus != "failed" {
+		t.Fatalf("LifecycleStatus = %q, want failed", got.LifecycleStatus)
+	}
+	if !strings.Contains(got.StatusReason, "No available disk candidates") {
+		t.Fatalf("StatusReason = %q, want longhorn reason", got.StatusReason)
+	}
+}
+
+func TestReconcilePersistentRecoveryToRunning(t *testing.T) {
+	initServiceTestDB(t)
+	ctx := context.Background()
+	sandboxStore := store.NewSandboxStore()
+
+	rec := persistentRecord("recon-ready", "failed", "storage provisioning failed: previous")
+	if err := sandboxStore.Create(ctx, rec); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	client := k8s.NewClientForTest(persistentObjects("recon-ready", corev1.PodRunning, true)...)
+	svc := NewSandboxReconcileService(client, sandboxStore)
+	if _, err := svc.Run(ctx, "manual"); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	got, err := sandboxStore.GetByID(ctx, "recon-ready")
+	if err != nil {
+		t.Fatalf("GetByID() error = %v", err)
+	}
+	if got.LifecycleStatus != "running" {
+		t.Fatalf("LifecycleStatus = %q, want running", got.LifecycleStatus)
+	}
+	if got.StatusReason != "" {
+		t.Fatalf("StatusReason = %q, want empty", got.StatusReason)
+	}
+}
+
+func TestReconcilePersistentReadyIgnoresHistoricalSchedulingWarning(t *testing.T) {
+	initServiceTestDB(t)
+	ctx := context.Background()
+	sandboxStore := store.NewSandboxStore()
+
+	rec := persistentRecord("recon-scheduled", "pending", "")
+	if err := sandboxStore.Create(ctx, rec); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	objects := append(
+		persistentObjects("recon-scheduled", corev1.PodRunning, true),
+		&corev1.Event{
+			ObjectMeta: metav1.ObjectMeta{Name: "pod-failed-scheduling", Namespace: k8s.DefaultSandboxNamespace},
+			InvolvedObject: corev1.ObjectReference{
+				Kind:      "Pod",
+				Name:      "sandbox-recon-scheduled",
+				Namespace: k8s.DefaultSandboxNamespace,
+			},
+			Type:          corev1.EventTypeWarning,
+			Reason:        "FailedScheduling",
+			Message:       "0/2 nodes are available: pod has unbound immediate PersistentVolumeClaims. preemption: 0/2 nodes are available",
+			LastTimestamp: metav1.NewTime(time.Now().UTC()),
+		},
+	)
+
+	client := k8s.NewClientForTest(objects...)
+	svc := NewSandboxReconcileService(client, sandboxStore)
+	if _, err := svc.Run(ctx, "manual"); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	got, err := sandboxStore.GetByID(ctx, "recon-scheduled")
+	if err != nil {
+		t.Fatalf("GetByID() error = %v", err)
+	}
+	if got.LifecycleStatus != "running" {
+		t.Fatalf("LifecycleStatus = %q, want running", got.LifecycleStatus)
+	}
+	if got.StatusReason != "" {
+		t.Fatalf("StatusReason = %q, want empty", got.StatusReason)
+	}
+}

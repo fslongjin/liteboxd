@@ -29,6 +29,8 @@ func (m *Manager) InstallOrUpgradeLonghorn() error {
 
 	settings := []string{
 		fmt.Sprintf("--set defaultSettings.defaultReplicaCount=%d", longhorn.DefaultReplicaCount),
+		// 通过 PVC 创建卷时，CSI 使用默认 StorageClass 的 numberOfReplicas 参数，由 persistence.defaultClassReplicaCount 控制
+		fmt.Sprintf("--set persistence.defaultClassReplicaCount=%d", longhorn.DefaultReplicaCount),
 		fmt.Sprintf("--set persistence.defaultClass=%t", m.longhornSetDefaultStorageClass(longhorn)),
 	}
 	fingerprint := longhornFingerprint(
