@@ -44,12 +44,23 @@ type Sandbox struct {
 	UpdatedAt       time.Time           `json:"updated_at"`
 	DeletedAt       *time.Time          `json:"deleted_at,omitempty"`
 	Persistence     *SandboxPersistence `json:"persistence,omitempty"`
+	Deletion        *SandboxDeletion    `json:"deletion,omitempty"`
 	RuntimeKind     string              `json:"runtimeKind,omitempty"`
 	RuntimeName     string              `json:"runtimeName,omitempty"`
 
 	// Network access fields
 	AccessToken string `json:"accessToken,omitempty"` // Access token for inbound requests
 	AccessURL   string `json:"accessUrl,omitempty"`   // Base URL for accessing the sandbox
+}
+
+type SandboxDeletion struct {
+	Phase         string     `json:"phase,omitempty"`
+	StartedAt     *time.Time `json:"startedAt,omitempty"`
+	LastAttemptAt *time.Time `json:"lastAttemptAt,omitempty"`
+	NextRetryAt   *time.Time `json:"nextRetryAt,omitempty"`
+	Attempts      int        `json:"attempts,omitempty"`
+	ForceLevel    int        `json:"forceLevel,omitempty"`
+	LastError     string     `json:"lastError,omitempty"`
 }
 
 // SandboxPersistence describes effective persistence settings on a sandbox.

@@ -70,12 +70,19 @@ paths:
     get:
       tags:
         - sandboxes
-      summary: List all sandboxes
-      description: Returns a list of all sandboxes in the system
+      summary: List sandboxes
+      description: Returns list of sandboxes. By default it includes sandboxes under deletion; use `include_terminating=false` to hide them.
       operationId: listSandboxes
+      parameters:
+        - name: include_terminating
+          in: query
+          required: false
+          schema:
+            type: boolean
+          description: Include sandboxes in terminating state (deletion in progress). Defaults to true.
       responses:
         '200':
-          description: List of sandboxes
+          description: Sandboxes list
           content:
             application/json:
               schema:
@@ -221,7 +228,7 @@ paths:
           required: false
           schema:
             type: string
-            enum: [bound, orphan_pvc, dangling_metadata]
+            enum: [bound, orphan_pvc, deleting, dangling_metadata]
           description: Filter by mapping state
         - name: page
           in: query
@@ -384,13 +391,17 @@ paths:
       tags:
         - sandboxes
       summary: Delete a sandbox
-      description: Deletes a sandbox and releases all associated resources
+      description: Accepts a sandbox deletion request and lets the server clean up resources asynchronously
       operationId: deleteSandbox
       parameters:
         - $ref: '#/components/parameters/SandboxId'
       responses:
-        '204':
-          description: Sandbox deleted successfully
+        '202':
+          description: Sandbox deletion accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Sandbox'
         '500':
           description: Internal server error
           content:
@@ -1140,6 +1151,8 @@ components:
           description: Deletion timestamp in RFC3339 format when deleted
         persistence:
           $ref: '#/components/schemas/SandboxPersistence'
+        deletion:
+          $ref: '#/components/schemas/SandboxDeletion'
         runtimeKind:
           type: string
           description: Runtime workload kind, e.g. pod|deployment
@@ -1156,6 +1169,29 @@ components:
           type: string
           description: Base gateway URL for sandbox access
           example: "http://localhost:8081/api/v1/sandbox/a1b2c3d4"
+
+    SandboxDeletion:
+      type: object
+      properties:
+        phase:
+          type: string
+          description: Deletion phase tracked by the control plane
+          example: "quiescing_runtime"
+        startedAt:
+          type: string
+          format: date-time
+        lastAttemptAt:
+          type: string
+          format: date-time
+        nextRetryAt:
+          type: string
+          format: date-time
+        attempts:
+          type: integer
+        forceLevel:
+          type: integer
+        lastError:
+          type: string
 
     SandboxStatus:
       type: string
@@ -1283,7 +1319,7 @@ components:
         state:
           type: string
           description: Mapping state between DB and K8s
-          enum: [bound, orphan_pvc, dangling_metadata]
+          enum: [bound, orphan_pvc, deleting, dangling_metadata]
         source:
           type: string
           description: Data source of this mapping item

@@ -228,8 +228,8 @@ func TestReconcileDeletedPersistentSandboxKeepsDeletedAndRetriesPVCDelete(t *tes
 	if got.LifecycleStatus != "deleted" || got.DesiredState != store.DesiredStateDeleted {
 		t.Fatalf("sandbox status regressed: %+v", got)
 	}
-	if _, err := client.GetPersistentVolumeClaim(ctx, rec.VolumeClaimName); err == nil {
-		t.Fatalf("PVC still exists, want deleted")
+	if _, err := client.GetPersistentVolumeClaim(ctx, rec.VolumeClaimName); err != nil {
+		t.Fatalf("PVC should remain for deletion service, get error = %v", err)
 	}
 
 	run, err := svc.ListRuns(ctx, 1)
@@ -242,12 +242,12 @@ func TestReconcileDeletedPersistentSandboxKeepsDeletedAndRetriesPVCDelete(t *tes
 	}
 	found := false
 	for _, item := range detail.Items {
-		if item.SandboxID == rec.ID && item.Action == "retry_delete" {
+		if item.SandboxID == rec.ID && item.Action == "deletion_pending" {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatalf("expected retry_delete reconcile item")
+		t.Fatalf("expected deletion_pending reconcile item")
 	}
 }
 
@@ -327,8 +327,8 @@ func TestReconcileDeletedNonPersistentSandboxDoesNotRegress(t *testing.T) {
 	if got.LifecycleStatus != "deleted" || got.DesiredState != store.DesiredStateDeleted {
 		t.Fatalf("sandbox status regressed: %+v", got)
 	}
-	if _, err := client.GetPod(ctx, rec.ID); err == nil {
-		t.Fatalf("pod still exists, want deleted")
+	if _, err := client.GetPod(ctx, rec.ID); err != nil {
+		t.Fatalf("pod should remain for deletion service, get error = %v", err)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/google/go-containerregistry/pkg/authn"
@@ -11,6 +12,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	storagev1 "k8s.io/api/storage/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -22,6 +24,14 @@ type CreatePersistentSandboxOptions struct {
 	StorageClassName string
 	VolumeSize       string
 	VolumeClaimName  string
+}
+
+type SandboxDeletionSnapshot struct {
+	Deployment        *appsv1.Deployment
+	Pods              []corev1.Pod
+	PVC               *corev1.PersistentVolumeClaim
+	PV                *corev1.PersistentVolume
+	VolumeAttachments []storagev1.VolumeAttachment
 }
 
 const (
@@ -124,6 +134,7 @@ func (c *Client) CreatePersistentSandbox(ctx context.Context, opts CreatePersist
 	labels := map[string]string{
 		"app":          LabelApp,
 		LabelSandboxID: opts.ID,
+		LabelManagedBy: ManagedByServer,
 	}
 	if opts.Network != nil && opts.Network.AllowInternetAccess && len(opts.Network.AllowedDomains) == 0 {
 		labels[LabelInternetAccess] = "true"
@@ -302,7 +313,9 @@ func (c *Client) ensurePersistentVolumeClaim(ctx context.Context, claimName, sto
 			Name:      claimName,
 			Namespace: c.sandboxNS,
 			Labels: map[string]string{
-				"app": LabelApp,
+				"app":          LabelApp,
+				LabelSandboxID: strings.TrimPrefix(claimName, "sandbox-data-"),
+				LabelManagedBy: ManagedByServer,
 			},
 		},
 		Spec: corev1.PersistentVolumeClaimSpec{
@@ -336,6 +349,133 @@ func (c *Client) DeletePersistentSandbox(ctx context.Context, sandboxID, claimNa
 		return fmt.Errorf("failed to delete pvc %s: %w", claimName, err)
 	}
 	return nil
+}
+
+func (c *Client) PatchDeploymentFinalizers(ctx context.Context, name string, finalizers []string) error {
+	deploy, err := c.clientset.AppsV1().Deployments(c.sandboxNS).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("failed to get deployment %s: %w", name, err)
+	}
+	deploy.Finalizers = append([]string(nil), finalizers...)
+	if _, err := c.clientset.AppsV1().Deployments(c.sandboxNS).Update(ctx, deploy, metav1.UpdateOptions{}); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("failed to update deployment %s finalizers: %w", name, err)
+	}
+	return nil
+}
+
+func (c *Client) PatchPVCFinalizers(ctx context.Context, name string, finalizers []string) error {
+	pvc, err := c.clientset.CoreV1().PersistentVolumeClaims(c.sandboxNS).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("failed to get pvc %s: %w", name, err)
+	}
+	pvc.Finalizers = append([]string(nil), finalizers...)
+	if _, err := c.clientset.CoreV1().PersistentVolumeClaims(c.sandboxNS).Update(ctx, pvc, metav1.UpdateOptions{}); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("failed to update pvc %s finalizers: %w", name, err)
+	}
+	return nil
+}
+
+func (c *Client) GetPersistentVolume(ctx context.Context, name string) (*corev1.PersistentVolume, error) {
+	pv, err := c.clientset.CoreV1().PersistentVolumes().Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return nil, err
+	}
+	return pv, nil
+}
+
+func (c *Client) DeletePersistentVolume(ctx context.Context, name string) error {
+	err := c.clientset.CoreV1().PersistentVolumes().Delete(ctx, name, metav1.DeleteOptions{})
+	if err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("failed to delete pv %s: %w", name, err)
+	}
+	return nil
+}
+
+func (c *Client) PatchPVFinalizers(ctx context.Context, name string, finalizers []string) error {
+	pv, err := c.clientset.CoreV1().PersistentVolumes().Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("failed to get pv %s: %w", name, err)
+	}
+	pv.Finalizers = append([]string(nil), finalizers...)
+	if _, err := c.clientset.CoreV1().PersistentVolumes().Update(ctx, pv, metav1.UpdateOptions{}); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("failed to update pv %s finalizers: %w", name, err)
+	}
+	return nil
+}
+
+func (c *Client) ListVolumeAttachmentsByPV(ctx context.Context, pvName string) ([]storagev1.VolumeAttachment, error) {
+	list, err := c.clientset.StorageV1().VolumeAttachments().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list volumeattachments: %w", err)
+	}
+	out := make([]storagev1.VolumeAttachment, 0)
+	for i := range list.Items {
+		item := list.Items[i]
+		if item.Spec.Source.PersistentVolumeName != nil && *item.Spec.Source.PersistentVolumeName == pvName {
+			out = append(out, item)
+		}
+	}
+	return out, nil
+}
+
+func (c *Client) DeleteVolumeAttachment(ctx context.Context, name string) error {
+	err := c.clientset.StorageV1().VolumeAttachments().Delete(ctx, name, metav1.DeleteOptions{})
+	if err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("failed to delete volumeattachment %s: %w", name, err)
+	}
+	return nil
+}
+
+func (c *Client) GetSandboxDeletionSnapshot(ctx context.Context, sandboxID, deploymentName, pvcName string) (*SandboxDeletionSnapshot, error) {
+	snapshot := &SandboxDeletionSnapshot{
+		Pods: []corev1.Pod{},
+	}
+	if deploymentName == "" {
+		deploymentName = fmt.Sprintf("sandbox-%s", sandboxID)
+	}
+	if pvcName == "" {
+		pvcName = fmt.Sprintf("sandbox-data-%s", sandboxID)
+	}
+	deploy, err := c.GetDeployment(ctx, deploymentName)
+	if err == nil {
+		snapshot.Deployment = deploy
+	} else if !apierrors.IsNotFound(err) {
+		return nil, fmt.Errorf("failed to get deployment %s: %w", deploymentName, err)
+	}
+	pods, err := c.ListSandboxPods(ctx, sandboxID)
+	if err != nil {
+		return nil, err
+	}
+	snapshot.Pods = pods
+	pvc, err := c.GetPersistentVolumeClaim(ctx, pvcName)
+	if err == nil {
+		snapshot.PVC = pvc
+		if pvc.Spec.VolumeName != "" {
+			pv, pvErr := c.GetPersistentVolume(ctx, pvc.Spec.VolumeName)
+			if pvErr == nil {
+				snapshot.PV = pv
+				attachments, attErr := c.ListVolumeAttachmentsByPV(ctx, pv.Name)
+				if attErr != nil {
+					return nil, attErr
+				}
+				snapshot.VolumeAttachments = attachments
+			} else if !apierrors.IsNotFound(pvErr) {
+				return nil, fmt.Errorf("failed to get pv %s: %w", pvc.Spec.VolumeName, pvErr)
+			}
+		}
+	} else if !apierrors.IsNotFound(err) {
+		return nil, fmt.Errorf("failed to get pvc %s: %w", pvcName, err)
+	}
+	return snapshot, nil
 }
 
 // StopPersistentSandbox scales the sandbox Deployment replicas to 0.

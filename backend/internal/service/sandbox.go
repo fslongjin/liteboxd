@@ -421,13 +421,23 @@ func (s *SandboxService) List(ctx context.Context) (*model.SandboxListResponse, 
 
 	items := make([]model.Sandbox, 0, len(records))
 	for i := range records {
-		sandbox, err := s.recordToSandbox(&records[i])
-		if err != nil {
-			return nil, err
-		}
-		items = append(items, *sandbox)
+		items = append(items, s.recordToSandboxMetadata(&records[i]))
 	}
 
+	return &model.SandboxListResponse{Items: items}, nil
+}
+
+// ListForUser lists sandboxes visible to end users.
+// When includeTerminating is true, also returns items under deletion.
+func (s *SandboxService) ListForUser(ctx context.Context, includeTerminating bool) (*model.SandboxListResponse, error) {
+	records, err := s.sandboxStore.ListForUser(ctx, includeTerminating)
+	if err != nil {
+		return nil, err
+	}
+	items := make([]model.Sandbox, 0, len(records))
+	for i := range records {
+		items = append(items, s.recordToSandboxMetadata(&records[i]))
+	}
 	return &model.SandboxListResponse{Items: items}, nil
 }
 
@@ -437,6 +447,7 @@ func (s *SandboxService) ListMetadata(ctx context.Context, opts model.SandboxMet
 		Template:        opts.Template,
 		DesiredState:    opts.DesiredState,
 		LifecycleStatus: opts.LifecycleStatus,
+		DeletionPhase:   opts.DeletionPhase,
 		CreatedFrom:     opts.CreatedFrom,
 		CreatedTo:       opts.CreatedTo,
 		DeletedFrom:     opts.DeletedFrom,
@@ -494,45 +505,37 @@ func (s *SandboxService) GetStatusHistory(ctx context.Context, id string, limit 
 	return &model.SandboxStatusHistoryResponse{Items: items}, nil
 }
 
-func (s *SandboxService) Delete(ctx context.Context, id string) error {
+func (s *SandboxService) Delete(ctx context.Context, id string) (*model.Sandbox, error) {
 	record, err := s.sandboxStore.GetByID(ctx, id)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if record == nil {
-		return fmt.Errorf("sandbox not found")
+		return nil, fmt.Errorf("sandbox not found")
+	}
+	if record.LifecycleStatus == "deleted" && record.DeletionPhase == store.DeletionPhaseCompleted {
+		sandbox := s.recordToSandboxMetadata(record)
+		return &sandbox, nil
 	}
 
-	fromStatus := record.LifecycleStatus
 	now := time.Now().UTC()
-	if err := s.sandboxStore.SetDesiredDeleted(ctx, id, now); err != nil {
-		return err
+	if err := s.sandboxStore.MarkDeletionRequested(ctx, id, now); err != nil {
+		return nil, err
 	}
-	_ = s.sandboxStore.AppendStatusHistory(ctx, id, "api", fromStatus, string(model.SandboxStatusTerminating), "delete requested", nil, now)
-
-	netPolicyMgr := k8s.NewNetworkPolicyManager(s.k8sClient)
-	if err := netPolicyMgr.DeleteDomainAllowlistPolicy(ctx, id); err != nil {
-		logx.LoggerWithRequestID(ctx).With("component", "sandbox_service", "sandbox_id", id).
-			Warn("failed to delete domain allowlist policy", "error", err)
-	}
-
-	if record.PersistenceEnabled {
-		if err := s.k8sClient.DeletePersistentSandbox(ctx, id, record.VolumeClaimName, record.VolumeReclaimPolicy); err != nil && !apierrors.IsNotFound(err) {
-			_ = s.sandboxStore.UpdateStatus(ctx, id, string(model.SandboxStatusFailed), err.Error(), time.Now().UTC())
-			return err
-		}
-	} else {
-		if err := s.k8sClient.DeletePod(ctx, id); err != nil && !apierrors.IsNotFound(err) {
-			_ = s.sandboxStore.UpdateStatus(ctx, id, string(model.SandboxStatusFailed), err.Error(), time.Now().UTC())
-			return err
-		}
-	}
-
-	if err := s.sandboxStore.MarkDeleted(ctx, id, "deleted by request", time.Now().UTC()); err != nil {
-		return err
-	}
-	_ = s.sandboxStore.AppendStatusHistory(ctx, id, "api", string(model.SandboxStatusTerminating), "deleted", "delete completed", nil, time.Now().UTC())
-	return nil
+	_ = s.sandboxStore.AppendStatusHistory(ctx, id, "api", record.LifecycleStatus, string(model.SandboxStatusTerminating), "delete requested", nil, now)
+	record.DesiredState = store.DesiredStateDeleted
+	record.LifecycleStatus = "terminating"
+	record.StatusReason = "delete requested"
+	record.DeletionPhase = store.DeletionPhaseRequested
+	record.DeletionStartedAt = &now
+	record.DeletionLastAttemptAt = nil
+	record.DeletionNextRetryAt = &now
+	record.DeletionAttempts = 0
+	record.DeletionForceLevel = 0
+	record.DeletionLastError = ""
+	record.DeletedAt = nil
+	sandbox := s.recordToSandboxMetadata(record)
+	return &sandbox, nil
 }
 
 func (s *SandboxService) Restart(ctx context.Context, id string) error {
@@ -840,29 +843,11 @@ func (s *SandboxService) cleanExpiredSandboxes() {
 	for _, rec := range expired {
 		sandboxID := rec.ID
 		logger.Info("deleting expired sandbox", "sandbox_id", sandboxID)
-		netPolicyMgr := k8s.NewNetworkPolicyManager(s.k8sClient)
-		if err := netPolicyMgr.DeleteDomainAllowlistPolicy(ctx, sandboxID); err != nil {
-			logger.Warn("failed to delete domain allowlist policy", "sandbox_id", sandboxID, "error", err)
+		if err := s.sandboxStore.MarkDeletionRequested(ctx, sandboxID, time.Now().UTC()); err != nil {
+			logger.Warn("failed to mark sandbox deletion requested", "sandbox_id", sandboxID, "error", err)
+			continue
 		}
-
-		_ = s.sandboxStore.SetDesiredDeleted(ctx, sandboxID, time.Now().UTC())
-		if rec.PersistenceEnabled {
-			if err := s.k8sClient.DeletePersistentSandbox(ctx, sandboxID, rec.VolumeClaimName, rec.VolumeReclaimPolicy); err != nil && !apierrors.IsNotFound(err) {
-				logger.Warn("failed to delete persistent sandbox", "sandbox_id", sandboxID, "error", err)
-				_ = s.sandboxStore.UpdateStatus(ctx, sandboxID, string(model.SandboxStatusFailed), err.Error(), time.Now().UTC())
-				continue
-			}
-		} else {
-			if err := s.k8sClient.DeletePod(ctx, sandboxID); err != nil && !apierrors.IsNotFound(err) {
-				logger.Warn("failed to delete pod", "sandbox_id", sandboxID, "error", err)
-				_ = s.sandboxStore.UpdateStatus(ctx, sandboxID, string(model.SandboxStatusFailed), err.Error(), time.Now().UTC())
-				continue
-			}
-		}
-		if err := s.sandboxStore.MarkDeleted(ctx, sandboxID, "ttl expired", time.Now().UTC()); err != nil {
-			logger.Warn("failed to mark sandbox deleted", "sandbox_id", sandboxID, "error", err)
-		}
-		_ = s.sandboxStore.AppendStatusHistory(ctx, sandboxID, "ttl_cleaner", rec.LifecycleStatus, "deleted", "ttl expired", nil, time.Now().UTC())
+		_ = s.sandboxStore.AppendStatusHistory(ctx, sandboxID, "ttl_cleaner", rec.LifecycleStatus, "terminating", "ttl expired", nil, time.Now().UTC())
 	}
 }
 
@@ -878,6 +863,7 @@ func (s *SandboxService) recordToSandbox(record *store.SandboxRecord) (*model.Sa
 
 func (s *SandboxService) recordToSandboxMetadata(record *store.SandboxRecord) model.Sandbox {
 	var persistence *model.SandboxPersistence
+	var deletion *model.SandboxDeletion
 	if record.PersistenceEnabled || record.PersistenceMode != "" || record.PersistenceSize != "" || record.StorageClassName != "" || record.VolumeClaimName != "" || record.VolumeReclaimPolicy != "" {
 		persistence = &model.SandboxPersistence{
 			Enabled:          record.PersistenceEnabled,
@@ -886,6 +872,17 @@ func (s *SandboxService) recordToSandboxMetadata(record *store.SandboxRecord) mo
 			StorageClassName: record.StorageClassName,
 			ReclaimPolicy:    record.VolumeReclaimPolicy,
 			VolumeClaimName:  record.VolumeClaimName,
+		}
+	}
+	if record.DeletionPhase != "" || record.DeletionStartedAt != nil || record.DeletionAttempts > 0 || record.DeletionForceLevel > 0 || record.DeletionLastError != "" {
+		deletion = &model.SandboxDeletion{
+			Phase:         record.DeletionPhase,
+			StartedAt:     record.DeletionStartedAt,
+			LastAttemptAt: record.DeletionLastAttemptAt,
+			NextRetryAt:   record.DeletionNextRetryAt,
+			Attempts:      record.DeletionAttempts,
+			ForceLevel:    record.DeletionForceLevel,
+			LastError:     record.DeletionLastError,
 		}
 	}
 	return model.Sandbox{
@@ -910,6 +907,7 @@ func (s *SandboxService) recordToSandboxMetadata(record *store.SandboxRecord) mo
 		DeletedAt:       record.DeletedAt,
 		AccessURL:       record.AccessURL,
 		Persistence:     persistence,
+		Deletion:        deletion,
 		RuntimeKind:     record.RuntimeKind,
 		RuntimeName:     record.RuntimeName,
 	}

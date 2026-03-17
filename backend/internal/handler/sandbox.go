@@ -65,7 +65,8 @@ func (h *SandboxHandler) Create(c *gin.Context) {
 }
 
 func (h *SandboxHandler) List(c *gin.Context) {
-	resp, err := h.svc.List(c.Request.Context())
+	includeTerminating := c.DefaultQuery("include_terminating", "true") == "true"
+	resp, err := h.svc.ListForUser(c.Request.Context(), includeTerminating)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -128,6 +129,7 @@ func (h *SandboxHandler) ListMetadata(c *gin.Context) {
 		Template:        c.Query("template"),
 		DesiredState:    c.Query("desired_state"),
 		LifecycleStatus: c.Query("lifecycle_status"),
+		DeletionPhase:   c.Query("deletion_phase"),
 		CreatedFrom:     createdFrom,
 		CreatedTo:       createdTo,
 		DeletedFrom:     deletedFrom,
@@ -168,13 +170,13 @@ func (h *SandboxHandler) ListPVCMappings(c *gin.Context) {
 func (h *SandboxHandler) Delete(c *gin.Context) {
 	id := c.Param("id")
 
-	err := h.svc.Delete(c.Request.Context(), id)
+	sandbox, err := h.svc.Delete(c.Request.Context(), id)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	c.JSON(http.StatusNoContent, nil)
+	c.JSON(http.StatusAccepted, sandbox)
 }
 
 func (h *SandboxHandler) Restart(c *gin.Context) {

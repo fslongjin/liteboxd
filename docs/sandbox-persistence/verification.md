@@ -127,3 +127,44 @@ kubectl -n liteboxd-sandbox describe pod <pod-name>
 
 - 当前持久化实现是“PVC 作为 overlay 可写层（upper/work）”，不会再整份拷贝 rootfs 到 PVC。  
 - 若出现 `No space left on device`，通常是业务写入超过 PVC 配额，而不是初始化拷贝导致。
+
+## 8. 删除卡住与 server 重启恢复验证
+
+### 8.1 删除请求不会被误报为完成
+
+1. 在 Web 控制台删除一个持久化 sandbox。
+2. 观察主列表中该 sandbox 消失。
+3. 打开 metadata/detail 页面，确认其仍显示：
+   - `lifecycle_status=terminating`
+   - `deletion.phase` 为非空
+
+### 8.2 模拟 PVC 删除收敛
+
+1. 删除一个 `reclaimPolicy=Delete` 的持久化 sandbox。
+2. 执行：
+
+```bash
+kubectl -n liteboxd-sandbox get pvc | grep sandbox-data-<sandbox-id>
+```
+
+预期：
+
+1. 删除初期可能短暂仍能看到 PVC。
+2. 随后 PVC 被 LiteBoxd 后台清理掉。
+
+### 8.3 server 重启后的继续删除
+
+1. 删除一个持久化 sandbox。
+2. 在删除尚未完全收敛前重启 `liteboxd-server`。
+3. 重启后检查 metadata/detail：
+   - `deletion.phase` 继续推进
+4. 再检查：
+
+```bash
+kubectl -n liteboxd-sandbox get deploy,pod,pvc | grep <sandbox-id>
+```
+
+预期：
+
+1. server 重启不会让删除停在中间状态。
+2. 后续 Deployment、Pod、PVC 仍会继续收敛直至消失。

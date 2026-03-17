@@ -26,10 +26,21 @@ export interface Sandbox {
   updated_at?: string
   deleted_at?: string
   persistence?: SandboxPersistence
+  deletion?: SandboxDeletion
   runtimeKind?: string
   runtimeName?: string
   accessToken?: string
   accessUrl?: string
+}
+
+export interface SandboxDeletion {
+  phase?: string
+  startedAt?: string
+  lastAttemptAt?: string
+  nextRetryAt?: string
+  attempts?: number
+  forceLevel?: number
+  lastError?: string
 }
 
 export interface SandboxPersistence {
@@ -46,6 +57,7 @@ export interface SandboxMetadataListParams {
   template?: string
   desired_state?: string
   lifecycle_status?: string
+  deletion_phase?: string
   created_from?: string
   created_to?: string
   deleted_from?: string
@@ -71,14 +83,14 @@ export interface PVCMapping {
   sandboxId?: string
   sandboxLifecycleStatus?: string
   reclaimPolicy?: string
-  state: 'bound' | 'orphan_pvc' | 'dangling_metadata'
+  state: 'bound' | 'orphan_pvc' | 'deleting' | 'dangling_metadata'
   source: 'db+k8s' | 'db' | 'k8s' | string
 }
 
 export interface PVCMappingListParams {
   sandbox_id?: string
   storage_class?: string
-  state?: 'bound' | 'orphan_pvc' | 'dangling_metadata'
+  state?: 'bound' | 'orphan_pvc' | 'deleting' | 'dangling_metadata'
   page?: number
   page_size?: number
 }
@@ -172,7 +184,8 @@ export interface ActionResponse {
 }
 
 export const sandboxApi = {
-  list: () => api.get<{ items: Sandbox[] }>('/sandboxes'),
+  list: (params?: { include_terminating?: boolean }) =>
+    api.get<{ items: Sandbox[] }>('/sandboxes', { params }),
 
   listMetadata: (params?: SandboxMetadataListParams) =>
     api.get<SandboxMetadataListResponse>('/sandboxes/metadata', { params }),
@@ -187,7 +200,7 @@ export const sandboxApi = {
 
   create: (data: CreateSandboxRequest) => api.post<Sandbox>('/sandboxes', data),
 
-  delete: (id: string) => api.delete(`/sandboxes/${id}`),
+  delete: (id: string) => api.delete<Sandbox>(`/sandboxes/${id}`),
 
   restart: (id: string) => api.post<ActionResponse>(`/sandboxes/${id}/restart`),
 
