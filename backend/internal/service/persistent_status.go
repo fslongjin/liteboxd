@@ -248,12 +248,16 @@ func (s *SandboxService) runPersistentStartupMonitor(ctx context.Context, id, de
 			state, reason := classifyPersistentStartup(snapshot)
 			switch state {
 			case persistentStartupReady:
-				s.updatePersistentRuntimeState(context.Background(), id, snapshot, string(model.SandboxStatusRunning), "")
-				_ = s.sandboxStore.AppendStatusHistory(context.Background(), id, "system", "pending", string(model.SandboxStatusRunning), "persistent sandbox is ready", nil, time.Now().UTC())
+				now := time.Now().UTC()
+				if s.updatePersistentRuntimeStateIfActive(context.Background(), id, snapshot, string(model.SandboxStatusRunning), "", now) {
+					_ = s.sandboxStore.AppendStatusHistory(context.Background(), id, "system", "pending", string(model.SandboxStatusRunning), "persistent sandbox is ready", nil, now)
+				}
 				return true
 			case persistentStartupFailed:
-				s.updatePersistentRuntimeState(context.Background(), id, snapshot, string(model.SandboxStatusFailed), reason)
-				_ = s.sandboxStore.AppendStatusHistory(context.Background(), id, "system", "pending", string(model.SandboxStatusFailed), reason, nil, time.Now().UTC())
+				now := time.Now().UTC()
+				if s.updatePersistentRuntimeStateIfActive(context.Background(), id, snapshot, string(model.SandboxStatusFailed), reason, now) {
+					_ = s.sandboxStore.AppendStatusHistory(context.Background(), id, "system", "pending", string(model.SandboxStatusFailed), reason, nil, now)
+				}
 				return false
 			case persistentStartupPending:
 				lastPendingReason = reason
@@ -263,6 +267,7 @@ func (s *SandboxService) runPersistentStartupMonitor(ctx context.Context, id, de
 		select {
 		case <-timeoutCtx.Done():
 			reason := "persistent sandbox startup timed out"
+			updated := false
 			if snapshot, err := s.k8sClient.GetPersistentSandboxSnapshot(context.Background(), id, deploymentName, pvcName); err == nil {
 				if state, classified := classifyPersistentStartup(snapshot); state == persistentStartupFailed {
 					reason = classified
@@ -271,14 +276,16 @@ func (s *SandboxService) runPersistentStartupMonitor(ctx context.Context, id, de
 				} else if pending := pendingPersistentStartupReason(snapshot); pending != "" {
 					reason = "persistent sandbox startup timed out: " + pending
 				}
-				s.updatePersistentRuntimeState(context.Background(), id, snapshot, string(model.SandboxStatusFailed), reason)
+				updated = s.updatePersistentRuntimeStateIfActive(context.Background(), id, snapshot, string(model.SandboxStatusFailed), reason, time.Now().UTC())
 			} else {
 				if lastPendingReason != "" {
 					reason = "persistent sandbox startup timed out: " + lastPendingReason
 				}
-				s.updateStatusDurable(id, string(model.SandboxStatusFailed), reason)
+				updated = s.updateStatusDurableIfActive(id, string(model.SandboxStatusFailed), reason)
 			}
-			_ = s.sandboxStore.AppendStatusHistory(context.Background(), id, "system", "pending", string(model.SandboxStatusFailed), reason, nil, time.Now().UTC())
+			if updated {
+				_ = s.sandboxStore.AppendStatusHistory(context.Background(), id, "system", "pending", string(model.SandboxStatusFailed), reason, nil, time.Now().UTC())
+			}
 			logger.Warn("persistent startup timed out", "reason", reason)
 			return false
 		case <-ticker.C:
@@ -303,6 +310,25 @@ func (s *SandboxService) updatePersistentRuntimeState(ctx context.Context, id st
 		return
 	}
 	_ = s.sandboxStore.UpdateStatus(ctx, id, lifecycleStatus, reason, now)
+}
+
+func (s *SandboxService) updatePersistentRuntimeStateIfActive(ctx context.Context, id string, snapshot *k8s.PersistentSandboxSnapshot, lifecycleStatus, reason string, now time.Time) bool {
+	if snapshot != nil && snapshot.Pod != nil {
+		updated, _ := s.sandboxStore.UpdateObservedStateIfActive(
+			ctx,
+			id,
+			string(snapshot.Pod.UID),
+			string(snapshot.Pod.Status.Phase),
+			snapshot.Pod.Status.PodIP,
+			lifecycleStatus,
+			reason,
+			now,
+			now,
+		)
+		return updated
+	}
+	updated, _ := s.sandboxStore.UpdateStatusIfActive(ctx, id, lifecycleStatus, reason, now)
+	return updated
 }
 
 func logWithSandboxID(ctx context.Context, id string) *slog.Logger {

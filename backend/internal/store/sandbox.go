@@ -309,6 +309,24 @@ func (s *SandboxStore) UpdateStatus(ctx context.Context, id, status, reason stri
 	return nil
 }
 
+func (s *SandboxStore) UpdateStatusIfActive(ctx context.Context, id, status, reason string, now time.Time) (bool, error) {
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE sandboxes
+		SET lifecycle_status = ?, status_reason = ?, updated_at = ?
+		WHERE id = ?
+		  AND desired_state = ?
+		  AND lifecycle_status <> ?
+	`, status, reason, now, id, DesiredStateActive, "deleted")
+	if err != nil {
+		return false, fmt.Errorf("failed to update active status: %w", err)
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("failed to get affected rows for active status update: %w", err)
+	}
+	return rows > 0, nil
+}
+
 func (s *SandboxStore) SetStopped(ctx context.Context, id string, now time.Time) error {
 	_, err := s.db.ExecContext(ctx, `
 		UPDATE sandboxes
@@ -344,6 +362,24 @@ func (s *SandboxStore) UpdateObservedState(ctx context.Context, id, podUID, podP
 		return fmt.Errorf("failed to update observed state: %w", err)
 	}
 	return nil
+}
+
+func (s *SandboxStore) UpdateObservedStateIfActive(ctx context.Context, id, podUID, podPhase, podIP, lifecycleStatus, reason string, lastSeen, now time.Time) (bool, error) {
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE sandboxes
+		SET pod_uid = ?, pod_phase = ?, pod_ip = ?, lifecycle_status = ?, status_reason = ?, last_seen_at = ?, updated_at = ?
+		WHERE id = ?
+		  AND desired_state = ?
+		  AND lifecycle_status <> ?
+	`, podUID, podPhase, podIP, lifecycleStatus, reason, lastSeen, now, id, DesiredStateActive, "deleted")
+	if err != nil {
+		return false, fmt.Errorf("failed to update active observed state: %w", err)
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("failed to get affected rows for active observed update: %w", err)
+	}
+	return rows > 0, nil
 }
 
 func (s *SandboxStore) AppendStatusHistory(ctx context.Context, sandboxID, source, fromStatus, toStatus, reason string, payload any, now time.Time) error {
