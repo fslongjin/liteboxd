@@ -103,6 +103,184 @@ func TestSandboxStoreCreateGetAndDeleteFlow(t *testing.T) {
 	}
 }
 
+func TestSandboxStoreUpdateStatusIfActive(t *testing.T) {
+	initTestDB(t)
+	ctx := context.Background()
+	s := NewSandboxStore()
+	now := time.Now().UTC()
+
+	active := &SandboxRecord{
+		ID:                    "active-status",
+		TemplateName:          "python",
+		TemplateVersion:       1,
+		Image:                 "python:3.11",
+		CPU:                   "500m",
+		Memory:                "512Mi",
+		TTL:                   3600,
+		EnvJSON:               `{}`,
+		DesiredState:          DesiredStateActive,
+		LifecycleStatus:       "pending",
+		ClusterNamespace:      "liteboxd-sandbox",
+		PodName:               "sandbox-active-status",
+		AccessTokenCiphertext: "cipher",
+		AccessTokenNonce:      "nonce",
+		AccessTokenKeyID:      "v1",
+		AccessTokenSHA256:     "hash",
+		AccessURL:             "http://gateway/active-status",
+		CreatedAt:             now,
+		ExpiresAt:             now.Add(time.Hour),
+		UpdatedAt:             now,
+	}
+	deleted := &SandboxRecord{
+		ID:                    "deleted-status",
+		TemplateName:          "python",
+		TemplateVersion:       1,
+		Image:                 "python:3.11",
+		CPU:                   "500m",
+		Memory:                "512Mi",
+		TTL:                   3600,
+		EnvJSON:               `{}`,
+		DesiredState:          DesiredStateDeleted,
+		LifecycleStatus:       "deleted",
+		ClusterNamespace:      "liteboxd-sandbox",
+		PodName:               "sandbox-deleted-status",
+		AccessTokenCiphertext: "cipher",
+		AccessTokenNonce:      "nonce",
+		AccessTokenKeyID:      "v1",
+		AccessTokenSHA256:     "hash",
+		AccessURL:             "http://gateway/deleted-status",
+		CreatedAt:             now,
+		ExpiresAt:             now.Add(time.Hour),
+		UpdatedAt:             now,
+		DeletedAt:             &now,
+	}
+	if err := s.Create(ctx, active); err != nil {
+		t.Fatalf("Create active error = %v", err)
+	}
+	if err := s.Create(ctx, deleted); err != nil {
+		t.Fatalf("Create deleted error = %v", err)
+	}
+
+	updated, err := s.UpdateStatusIfActive(ctx, active.ID, "running", "", now.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("UpdateStatusIfActive(active) error = %v", err)
+	}
+	if !updated {
+		t.Fatalf("UpdateStatusIfActive(active) updated = false, want true")
+	}
+	gotActive, err := s.GetByID(ctx, active.ID)
+	if err != nil {
+		t.Fatalf("GetByID(active) error = %v", err)
+	}
+	if gotActive.LifecycleStatus != "running" {
+		t.Fatalf("active LifecycleStatus = %q, want running", gotActive.LifecycleStatus)
+	}
+
+	updated, err = s.UpdateStatusIfActive(ctx, deleted.ID, "pending", "should not apply", now.Add(2*time.Minute))
+	if err != nil {
+		t.Fatalf("UpdateStatusIfActive(deleted) error = %v", err)
+	}
+	if updated {
+		t.Fatalf("UpdateStatusIfActive(deleted) updated = true, want false")
+	}
+	gotDeleted, err := s.GetByID(ctx, deleted.ID)
+	if err != nil {
+		t.Fatalf("GetByID(deleted) error = %v", err)
+	}
+	if gotDeleted.LifecycleStatus != "deleted" {
+		t.Fatalf("deleted LifecycleStatus = %q, want deleted", gotDeleted.LifecycleStatus)
+	}
+}
+
+func TestSandboxStoreUpdateObservedStateIfActive(t *testing.T) {
+	initTestDB(t)
+	ctx := context.Background()
+	s := NewSandboxStore()
+	now := time.Now().UTC()
+
+	active := &SandboxRecord{
+		ID:                    "active-observed",
+		TemplateName:          "python",
+		TemplateVersion:       1,
+		Image:                 "python:3.11",
+		CPU:                   "500m",
+		Memory:                "512Mi",
+		TTL:                   3600,
+		EnvJSON:               `{}`,
+		DesiredState:          DesiredStateActive,
+		LifecycleStatus:       "pending",
+		ClusterNamespace:      "liteboxd-sandbox",
+		PodName:               "sandbox-active-observed",
+		AccessTokenCiphertext: "cipher",
+		AccessTokenNonce:      "nonce",
+		AccessTokenKeyID:      "v1",
+		AccessTokenSHA256:     "hash",
+		AccessURL:             "http://gateway/active-observed",
+		CreatedAt:             now,
+		ExpiresAt:             now.Add(time.Hour),
+		UpdatedAt:             now,
+	}
+	deleted := &SandboxRecord{
+		ID:                    "deleted-observed",
+		TemplateName:          "python",
+		TemplateVersion:       1,
+		Image:                 "python:3.11",
+		CPU:                   "500m",
+		Memory:                "512Mi",
+		TTL:                   3600,
+		EnvJSON:               `{}`,
+		DesiredState:          DesiredStateDeleted,
+		LifecycleStatus:       "deleted",
+		ClusterNamespace:      "liteboxd-sandbox",
+		PodName:               "sandbox-deleted-observed",
+		AccessTokenCiphertext: "cipher",
+		AccessTokenNonce:      "nonce",
+		AccessTokenKeyID:      "v1",
+		AccessTokenSHA256:     "hash",
+		AccessURL:             "http://gateway/deleted-observed",
+		CreatedAt:             now,
+		ExpiresAt:             now.Add(time.Hour),
+		UpdatedAt:             now,
+		DeletedAt:             &now,
+	}
+	if err := s.Create(ctx, active); err != nil {
+		t.Fatalf("Create active error = %v", err)
+	}
+	if err := s.Create(ctx, deleted); err != nil {
+		t.Fatalf("Create deleted error = %v", err)
+	}
+
+	updated, err := s.UpdateObservedStateIfActive(ctx, active.ID, "uid-new", "Running", "10.0.0.8", "running", "", now.Add(time.Minute), now.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("UpdateObservedStateIfActive(active) error = %v", err)
+	}
+	if !updated {
+		t.Fatalf("UpdateObservedStateIfActive(active) updated = false, want true")
+	}
+	gotActive, err := s.GetByID(ctx, active.ID)
+	if err != nil {
+		t.Fatalf("GetByID(active) error = %v", err)
+	}
+	if gotActive.PodUID != "uid-new" || gotActive.PodPhase != "Running" || gotActive.LifecycleStatus != "running" {
+		t.Fatalf("active observed state unexpected: %+v", gotActive)
+	}
+
+	updated, err = s.UpdateObservedStateIfActive(ctx, deleted.ID, "uid-bad", "Pending", "10.0.0.9", "pending", "", now.Add(2*time.Minute), now.Add(2*time.Minute))
+	if err != nil {
+		t.Fatalf("UpdateObservedStateIfActive(deleted) error = %v", err)
+	}
+	if updated {
+		t.Fatalf("UpdateObservedStateIfActive(deleted) updated = true, want false")
+	}
+	gotDeleted, err := s.GetByID(ctx, deleted.ID)
+	if err != nil {
+		t.Fatalf("GetByID(deleted) error = %v", err)
+	}
+	if gotDeleted.PodUID == "uid-bad" || gotDeleted.LifecycleStatus != "deleted" {
+		t.Fatalf("deleted observed state should remain unchanged: %+v", gotDeleted)
+	}
+}
+
 func TestSandboxStoreReconcileRunFlow(t *testing.T) {
 	initTestDB(t)
 	ctx := context.Background()

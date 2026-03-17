@@ -192,3 +192,139 @@ func TestReconcilePersistentReadyIgnoresHistoricalSchedulingWarning(t *testing.T
 		t.Fatalf("StatusReason = %q, want empty", got.StatusReason)
 	}
 }
+
+func TestReconcileDeletedPersistentSandboxKeepsDeletedAndRetriesPVCDelete(t *testing.T) {
+	initServiceTestDB(t)
+	ctx := context.Background()
+	sandboxStore := store.NewSandboxStore()
+
+	rec := persistentRecord("recon-del-pvc", "deleted", "")
+	rec.DesiredState = store.DesiredStateDeleted
+	rec.VolumeReclaimPolicy = "Delete"
+	now := time.Now().UTC()
+	rec.DeletedAt = &now
+	if err := sandboxStore.Create(ctx, rec); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	pvc := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{Name: "sandbox-data-recon-del-pvc", Namespace: k8s.DefaultSandboxNamespace},
+		Status:     corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimBound},
+	}
+	client := k8s.NewClientForTest(pvc)
+
+	svc := NewSandboxReconcileService(client, sandboxStore)
+	if _, err := svc.Run(ctx, "manual"); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	got, err := sandboxStore.GetByID(ctx, rec.ID)
+	if err != nil {
+		t.Fatalf("GetByID() error = %v", err)
+	}
+	if got.LifecycleStatus != "deleted" || got.DesiredState != store.DesiredStateDeleted {
+		t.Fatalf("sandbox status regressed: %+v", got)
+	}
+	if _, err := client.GetPersistentVolumeClaim(ctx, rec.VolumeClaimName); err == nil {
+		t.Fatalf("PVC still exists, want deleted")
+	}
+
+	run, err := svc.ListRuns(ctx, 1)
+	if err != nil {
+		t.Fatalf("ListRuns() error = %v", err)
+	}
+	detail, err := svc.GetRun(ctx, run.Items[0].ID)
+	if err != nil {
+		t.Fatalf("GetRun() error = %v", err)
+	}
+	found := false
+	for _, item := range detail.Items {
+		if item.SandboxID == rec.ID && item.Action == "retry_delete" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected retry_delete reconcile item")
+	}
+}
+
+func TestReconcileDeletedPersistentSandboxRetainKeepsPVC(t *testing.T) {
+	initServiceTestDB(t)
+	ctx := context.Background()
+	sandboxStore := store.NewSandboxStore()
+
+	rec := persistentRecord("recon-del-retain", "deleted", "")
+	rec.DesiredState = store.DesiredStateDeleted
+	rec.VolumeReclaimPolicy = "Retain"
+	now := time.Now().UTC()
+	rec.DeletedAt = &now
+	if err := sandboxStore.Create(ctx, rec); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	pvc := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{Name: "sandbox-data-recon-del-retain", Namespace: k8s.DefaultSandboxNamespace},
+		Status:     corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimBound},
+	}
+	client := k8s.NewClientForTest(pvc)
+
+	svc := NewSandboxReconcileService(client, sandboxStore)
+	if _, err := svc.Run(ctx, "manual"); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	got, err := sandboxStore.GetByID(ctx, rec.ID)
+	if err != nil {
+		t.Fatalf("GetByID() error = %v", err)
+	}
+	if got.LifecycleStatus != "deleted" {
+		t.Fatalf("LifecycleStatus = %q, want deleted", got.LifecycleStatus)
+	}
+	if _, err := client.GetPersistentVolumeClaim(ctx, rec.VolumeClaimName); err != nil {
+		t.Fatalf("PVC should be retained, get error = %v", err)
+	}
+}
+
+func TestReconcileDeletedNonPersistentSandboxDoesNotRegress(t *testing.T) {
+	initServiceTestDB(t)
+	ctx := context.Background()
+	sandboxStore := store.NewSandboxStore()
+
+	rec := makeTestSandboxRecord("recon-del-pod", false, "deleted")
+	rec.DesiredState = store.DesiredStateDeleted
+	now := time.Now().UTC()
+	rec.DeletedAt = &now
+	if err := sandboxStore.Create(ctx, rec); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "sandbox-recon-del-pod",
+			Namespace: k8s.DefaultSandboxNamespace,
+			UID:       types.UID("uid-recon-del-pod"),
+			Labels: map[string]string{
+				"app":              k8s.LabelApp,
+				k8s.LabelSandboxID: rec.ID,
+			},
+		},
+		Status: corev1.PodStatus{Phase: corev1.PodSucceeded},
+	}
+	client := k8s.NewClientForTest(pod)
+
+	svc := NewSandboxReconcileService(client, sandboxStore)
+	if _, err := svc.Run(ctx, "manual"); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	got, err := sandboxStore.GetByID(ctx, rec.ID)
+	if err != nil {
+		t.Fatalf("GetByID() error = %v", err)
+	}
+	if got.LifecycleStatus != "deleted" || got.DesiredState != store.DesiredStateDeleted {
+		t.Fatalf("sandbox status regressed: %+v", got)
+	}
+	if _, err := client.GetPod(ctx, rec.ID); err == nil {
+		t.Fatalf("pod still exists, want deleted")
+	}
+}

@@ -377,13 +377,19 @@ func (s *SandboxService) runPostCreationTasks(ctx context.Context, id string, pr
 		if err := s.k8sClient.WaitForReady(readyCtx, id, probe); err != nil {
 			// Pod created but not ready - log the error and update metadata state
 			logger.Warn("post-creation pod not ready", "error", err)
-			_ = s.sandboxStore.UpdateStatus(context.Background(), id, string(model.SandboxStatusFailed), "startup/readiness failed", time.Now().UTC())
-			_ = s.sandboxStore.AppendStatusHistory(context.Background(), id, "system", "pending", string(model.SandboxStatusFailed), "startup/readiness failed", nil, time.Now().UTC())
+			now := time.Now().UTC()
+			updated, _ := s.sandboxStore.UpdateStatusIfActive(context.Background(), id, string(model.SandboxStatusFailed), "startup/readiness failed", now)
+			if updated {
+				_ = s.sandboxStore.AppendStatusHistory(context.Background(), id, "system", "pending", string(model.SandboxStatusFailed), "startup/readiness failed", nil, now)
+			}
 			return
 		}
 
-		_ = s.sandboxStore.UpdateStatus(context.Background(), id, string(model.SandboxStatusRunning), "", time.Now().UTC())
-		_ = s.sandboxStore.AppendStatusHistory(context.Background(), id, "system", "pending", string(model.SandboxStatusRunning), "sandbox is ready", nil, time.Now().UTC())
+		now := time.Now().UTC()
+		updated, _ := s.sandboxStore.UpdateStatusIfActive(context.Background(), id, string(model.SandboxStatusRunning), "", now)
+		if updated {
+			_ = s.sandboxStore.AppendStatusHistory(context.Background(), id, "system", "pending", string(model.SandboxStatusRunning), "sandbox is ready", nil, now)
+		}
 	}
 
 	// Upload files if specified
@@ -966,6 +972,13 @@ func (s *SandboxService) updateStatusDurable(id, status, reason string) {
 	_ = s.sandboxStore.UpdateStatus(storeCtx, id, status, reason, time.Now().UTC())
 }
 
+func (s *SandboxService) updateStatusDurableIfActive(id, status, reason string) bool {
+	storeCtx, cancel := context.WithTimeout(context.Background(), durableStoreWriteTimeout)
+	defer cancel()
+	updated, _ := s.sandboxStore.UpdateStatusIfActive(storeCtx, id, status, reason, time.Now().UTC())
+	return updated
+}
+
 func (s *SandboxService) appendStatusHistoryDurable(id, source, fromStatus, toStatus, reason string) {
 	storeCtx, cancel := context.WithTimeout(context.Background(), durableStoreWriteTimeout)
 	defer cancel()
@@ -987,4 +1000,22 @@ func (s *SandboxService) updateObservedStateDurable(id, podUID, podPhase, podIP,
 		now,
 		now,
 	)
+}
+
+func (s *SandboxService) updateObservedStateDurableIfActive(id, podUID, podPhase, podIP, lifecycleStatus, reason string) bool {
+	storeCtx, cancel := context.WithTimeout(context.Background(), durableStoreWriteTimeout)
+	defer cancel()
+	now := time.Now().UTC()
+	updated, _ := s.sandboxStore.UpdateObservedStateIfActive(
+		storeCtx,
+		id,
+		podUID,
+		podPhase,
+		podIP,
+		lifecycleStatus,
+		reason,
+		now,
+		now,
+	)
+	return updated
 }

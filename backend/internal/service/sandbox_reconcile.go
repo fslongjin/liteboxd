@@ -98,6 +98,21 @@ func (s *SandboxReconcileService) Run(ctx context.Context, trigger string) (*mod
 			continue
 		}
 
+		if rec.DesiredState == store.DesiredStateDeleted {
+			handled, err := s.reconcileDeletedSandbox(ctx, runID, &rec, podMap)
+			if err != nil {
+				_ = s.sandboxStore.FinishReconcileRun(ctx, runID, reconcileStatusFailed, err.Error(), len(dbRecords), len(podList.Items), driftCount, fixedCount, time.Now().UTC())
+				return nil, err
+			}
+			if handled.drifted {
+				driftCount++
+			}
+			if handled.fixed {
+				fixedCount++
+			}
+			continue
+		}
+
 		idx, ok := podMap[rec.ID]
 		if !ok {
 			driftCount++
@@ -121,7 +136,7 @@ func (s *SandboxReconcileService) Run(ctx context.Context, trigger string) (*mod
 					missingSince = *rec.LastSeenAt
 				}
 				if time.Since(missingSince) >= s.lostGracePeriod {
-					if err := s.sandboxStore.UpdateStatus(ctx, rec.ID, "lost", "reconcile: pod missing beyond grace period", time.Now().UTC()); err == nil {
+					if updated, err := s.sandboxStore.UpdateStatusIfActive(ctx, rec.ID, "lost", "reconcile: pod missing beyond grace period", time.Now().UTC()); err == nil && updated {
 						fixedCount++
 						action = "mark_lost"
 					}
@@ -147,7 +162,7 @@ func (s *SandboxReconcileService) Run(ctx context.Context, trigger string) (*mod
 		mismatch := rec.PodUID != string(pod.UID) || rec.PodPhase != string(pod.Status.Phase) || rec.PodIP != pod.Status.PodIP || rec.LifecycleStatus != newLifecycle
 		if mismatch {
 			driftCount++
-			if err := s.sandboxStore.UpdateObservedState(
+			if updated, err := s.sandboxStore.UpdateObservedStateIfActive(
 				ctx,
 				rec.ID,
 				string(pod.UID),
@@ -157,7 +172,7 @@ func (s *SandboxReconcileService) Run(ctx context.Context, trigger string) (*mod
 				"",
 				time.Now().UTC(),
 				time.Now().UTC(),
-			); err == nil {
+			); err == nil && updated {
 				fixedCount++
 			}
 			_ = s.sandboxStore.AddReconcileItem(ctx, &store.ReconcileItemRecord{
@@ -206,6 +221,10 @@ func (s *SandboxReconcileService) reconcilePersistentSandbox(ctx context.Context
 		delete(podMap, rec.ID)
 	}
 
+	if rec.DesiredState == store.DesiredStateDeleted {
+		return s.reconcileDeletedPersistentSandbox(ctx, runID, rec, snapshot)
+	}
+
 	if snapshot.Pod == nil && snapshot.PVC == nil && snapshot.Deployment == nil {
 		result.drifted = true
 		action := "none"
@@ -228,7 +247,7 @@ func (s *SandboxReconcileService) reconcilePersistentSandbox(ctx context.Context
 				missingSince = *rec.LastSeenAt
 			}
 			if time.Since(missingSince) >= s.lostGracePeriod {
-				if err := s.sandboxStore.UpdateStatus(ctx, rec.ID, "lost", "reconcile: persistent runtime missing beyond grace period", time.Now().UTC()); err == nil {
+				if updated, err := s.sandboxStore.UpdateStatusIfActive(ctx, rec.ID, "lost", "reconcile: persistent runtime missing beyond grace period", time.Now().UTC()); err == nil && updated {
 					_ = s.sandboxStore.AppendStatusHistory(ctx, rec.ID, "reconcile", rec.LifecycleStatus, "lost", "reconcile: persistent runtime missing beyond grace period", nil, time.Now().UTC())
 					result.fixed = true
 					action = "mark_lost"
@@ -252,7 +271,7 @@ func (s *SandboxReconcileService) reconcilePersistentSandbox(ctx context.Context
 	case persistentStartupReady:
 		if rec.LifecycleStatus != string(model.SandboxStatusRunning) || rec.StatusReason != "" || rec.PodUID != string(snapshot.Pod.UID) || rec.PodPhase != string(snapshot.Pod.Status.Phase) || rec.PodIP != snapshot.Pod.Status.PodIP {
 			result.drifted = true
-			if err := s.sandboxStore.UpdateObservedState(
+			if updated, err := s.sandboxStore.UpdateObservedStateIfActive(
 				ctx,
 				rec.ID,
 				string(snapshot.Pod.UID),
@@ -262,7 +281,7 @@ func (s *SandboxReconcileService) reconcilePersistentSandbox(ctx context.Context
 				"",
 				time.Now().UTC(),
 				time.Now().UTC(),
-			); err == nil {
+			); err == nil && updated {
 				result.fixed = true
 				_ = s.sandboxStore.AppendStatusHistory(ctx, rec.ID, "reconcile", rec.LifecycleStatus, string(model.SandboxStatusRunning), "reconcile: persistent sandbox is ready", nil, time.Now().UTC())
 			}
@@ -280,7 +299,7 @@ func (s *SandboxReconcileService) reconcilePersistentSandbox(ctx context.Context
 			result.drifted = true
 			now := time.Now().UTC()
 			if snapshot.Pod != nil {
-				if err := s.sandboxStore.UpdateObservedState(
+				if updated, err := s.sandboxStore.UpdateObservedStateIfActive(
 					ctx,
 					rec.ID,
 					string(snapshot.Pod.UID),
@@ -290,10 +309,10 @@ func (s *SandboxReconcileService) reconcilePersistentSandbox(ctx context.Context
 					reason,
 					now,
 					now,
-				); err == nil {
+				); err == nil && updated {
 					result.fixed = true
 				}
-			} else if err := s.sandboxStore.UpdateStatus(ctx, rec.ID, string(model.SandboxStatusFailed), reason, now); err == nil {
+			} else if updated, err := s.sandboxStore.UpdateStatusIfActive(ctx, rec.ID, string(model.SandboxStatusFailed), reason, now); err == nil && updated {
 				result.fixed = true
 			}
 			if result.fixed {
@@ -322,10 +341,10 @@ func (s *SandboxReconcileService) reconcilePersistentSandbox(ctx context.Context
 			result.drifted = true
 			now := time.Now().UTC()
 			if snapshot.Pod != nil {
-				if err := s.sandboxStore.UpdateObservedState(ctx, rec.ID, podUID, podPhase, podIP, string(model.SandboxStatusPending), "", now, now); err == nil {
+				if updated, err := s.sandboxStore.UpdateObservedStateIfActive(ctx, rec.ID, podUID, podPhase, podIP, string(model.SandboxStatusPending), "", now, now); err == nil && updated {
 					result.fixed = true
 				}
-			} else if err := s.sandboxStore.UpdateStatus(ctx, rec.ID, string(model.SandboxStatusPending), "", now); err == nil {
+			} else if updated, err := s.sandboxStore.UpdateStatusIfActive(ctx, rec.ID, string(model.SandboxStatusPending), "", now); err == nil && updated {
 				result.fixed = true
 			}
 			if result.fixed && rec.LifecycleStatus != string(model.SandboxStatusPending) {
@@ -342,6 +361,80 @@ func (s *SandboxReconcileService) reconcilePersistentSandbox(ctx context.Context
 		}
 	}
 
+	return result, nil
+}
+
+func (s *SandboxReconcileService) reconcileDeletedSandbox(ctx context.Context, runID string, rec *store.SandboxRecord, podMap map[string]int) (reconcileResult, error) {
+	result := reconcileResult{}
+	if _, ok := podMap[rec.ID]; ok {
+		delete(podMap, rec.ID)
+		result.drifted = true
+		if err := s.k8sClient.DeletePod(ctx, rec.ID); err != nil {
+			return result, err
+		}
+		result.fixed = true
+		_ = s.sandboxStore.AddReconcileItem(ctx, &store.ReconcileItemRecord{
+			RunID:     runID,
+			SandboxID: rec.ID,
+			DriftType: "status_mismatch",
+			Action:    "retry_delete",
+			Detail:    "delete convergence in progress: residual pod found",
+			CreatedAt: time.Now().UTC(),
+		})
+		return result, nil
+	}
+	if rec.LifecycleStatus != "deleted" {
+		result.drifted = true
+		if err := s.sandboxStore.MarkDeleted(ctx, rec.ID, "reconcile: deleted sandbox converged", time.Now().UTC()); err == nil {
+			result.fixed = true
+			_ = s.sandboxStore.AppendStatusHistory(ctx, rec.ID, "reconcile", rec.LifecycleStatus, "deleted", "reconcile: deleted sandbox converged", nil, time.Now().UTC())
+		}
+	}
+	return result, nil
+}
+
+func (s *SandboxReconcileService) reconcileDeletedPersistentSandbox(ctx context.Context, runID string, rec *store.SandboxRecord, snapshot *k8s.PersistentSandboxSnapshot) (reconcileResult, error) {
+	result := reconcileResult{}
+	now := time.Now().UTC()
+
+	hasResidualDeployment := snapshot.Deployment != nil
+	hasResidualPod := snapshot.Pod != nil
+	hasResidualPVC := snapshot.PVC != nil && rec.VolumeReclaimPolicy != "Retain"
+	hasResidual := hasResidualDeployment || hasResidualPod || hasResidualPVC
+
+	if hasResidual {
+		result.drifted = true
+		if err := s.k8sClient.DeletePersistentSandbox(ctx, rec.ID, rec.VolumeClaimName, rec.VolumeReclaimPolicy); err != nil {
+			return result, err
+		}
+		result.fixed = true
+		detail := "delete convergence in progress"
+		switch {
+		case hasResidualPVC:
+			detail = "delete convergence in progress: residual pvc found"
+		case hasResidualPod:
+			detail = "delete convergence in progress: residual pod found"
+		case hasResidualDeployment:
+			detail = "delete convergence in progress: residual deployment found"
+		}
+		_ = s.sandboxStore.AddReconcileItem(ctx, &store.ReconcileItemRecord{
+			RunID:     runID,
+			SandboxID: rec.ID,
+			DriftType: "status_mismatch",
+			Action:    "retry_delete",
+			Detail:    detail,
+			CreatedAt: now,
+		})
+		return result, nil
+	}
+
+	if rec.LifecycleStatus != "deleted" {
+		result.drifted = true
+		if err := s.sandboxStore.MarkDeleted(ctx, rec.ID, "reconcile: persistent runtime deleted", now); err == nil {
+			result.fixed = true
+			_ = s.sandboxStore.AppendStatusHistory(ctx, rec.ID, "reconcile", rec.LifecycleStatus, "deleted", "reconcile: persistent runtime deleted", nil, now)
+		}
+	}
 	return result, nil
 }
 
