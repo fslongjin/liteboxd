@@ -10,9 +10,12 @@ import (
 	"github.com/fslongjin/liteboxd/backend/internal/store"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	k8sfake "k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 )
 
 func persistentRecord(id, lifecycle, reason string) *store.SandboxRecord {
@@ -326,5 +329,58 @@ func TestReconcileDeletedNonPersistentSandboxDoesNotRegress(t *testing.T) {
 	}
 	if _, err := client.GetPod(ctx, rec.ID); err == nil {
 		t.Fatalf("pod still exists, want deleted")
+	}
+}
+
+func TestReconcileDeletedNonPersistentSandboxDeletePodNotFoundIsIgnored(t *testing.T) {
+	initServiceTestDB(t)
+	ctx := context.Background()
+	sandboxStore := store.NewSandboxStore()
+
+	rec := makeTestSandboxRecord("recon-del-pod-race", false, "deleted")
+	rec.DesiredState = store.DesiredStateDeleted
+	now := time.Now().UTC()
+	rec.DeletedAt = &now
+	if err := sandboxStore.Create(ctx, rec); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "sandbox-recon-del-pod-race",
+			Namespace: k8s.DefaultSandboxNamespace,
+			UID:       types.UID("uid-recon-del-pod-race"),
+			Labels: map[string]string{
+				"app":              k8s.LabelApp,
+				k8s.LabelSandboxID: rec.ID,
+			},
+		},
+		Status: corev1.PodStatus{Phase: corev1.PodSucceeded},
+	}
+	client := k8s.NewClientForTestWithSetup(func(clientset *k8sfake.Clientset) {
+		clientset.PrependReactor("delete", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
+			return true, nil, apierrors.NewNotFound(corev1.Resource("pods"), "sandbox-"+rec.ID)
+		})
+	}, pod)
+
+	svc := NewSandboxReconcileService(client, sandboxStore)
+	if _, err := svc.Run(ctx, "manual"); err != nil {
+		t.Fatalf("Run() error = %v, want nil on benign NotFound", err)
+	}
+
+	got, err := sandboxStore.GetByID(ctx, rec.ID)
+	if err != nil {
+		t.Fatalf("GetByID() error = %v", err)
+	}
+	if got.LifecycleStatus != "deleted" || got.DesiredState != store.DesiredStateDeleted {
+		t.Fatalf("sandbox status regressed: %+v", got)
+	}
+
+	run, err := svc.ListRuns(ctx, 1)
+	if err != nil {
+		t.Fatalf("ListRuns() error = %v", err)
+	}
+	if len(run.Items) != 1 || run.Items[0].Status != reconcileStatusCompleted {
+		t.Fatalf("unexpected reconcile run status: %+v", run.Items)
 	}
 }

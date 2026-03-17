@@ -10,6 +10,7 @@ import (
 	"github.com/fslongjin/liteboxd/backend/internal/model"
 	"github.com/fslongjin/liteboxd/backend/internal/store"
 	"github.com/google/uuid"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
 
 const (
@@ -369,7 +370,7 @@ func (s *SandboxReconcileService) reconcileDeletedSandbox(ctx context.Context, r
 	if _, ok := podMap[rec.ID]; ok {
 		delete(podMap, rec.ID)
 		result.drifted = true
-		if err := s.k8sClient.DeletePod(ctx, rec.ID); err != nil {
+		if err := s.k8sClient.DeletePod(ctx, rec.ID); err != nil && !apierrors.IsNotFound(err) {
 			return result, err
 		}
 		result.fixed = true
