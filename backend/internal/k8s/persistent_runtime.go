@@ -460,6 +460,18 @@ ensure_bind_mount() {
   mount --make-rslave "$target" || true
 }
 
+ensure_bind_file() {
+  src="$1"
+  target="$2"
+  parent="$(dirname "$target")"
+  mkdir -p "$parent"
+  touch "$target"
+  if is_mounted "$target"; then
+    return 0
+  fi
+  mount --bind "$src" "$target"
+}
+
 mkdir -p "$UPPER" "$WORK" "$MERGED"
 
 # If this pod restart path already mounted overlay, keep existing writable state.
@@ -488,6 +500,10 @@ ensure_proc_mount "$MERGED/proc"
 ensure_bind_mount /sys "$MERGED/sys"
 ensure_bind_mount /dev "$MERGED/dev"
 ensure_bind_mount /run "$MERGED/run"
+# Preserve Pod-injected network identity files for the chroot runtime.
+ensure_bind_file /etc/resolv.conf "$MERGED/etc/resolv.conf"
+ensure_bind_file /etc/hosts "$MERGED/etc/hosts"
+ensure_bind_file /etc/hostname "$MERGED/etc/hostname"
 
 # Basic sanity check to fail fast when mount is not effective.
 test -d "$MERGED/etc"
