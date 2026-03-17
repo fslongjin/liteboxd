@@ -234,6 +234,64 @@ func TestStopSuccess(t *testing.T) {
 	}
 }
 
+func TestListForUserIncludesTerminatingWithoutDecryptingToken(t *testing.T) {
+	initServiceTestDB(t)
+	ctx := context.Background()
+	sandboxStore := store.NewSandboxStore()
+
+	now := time.Now().UTC()
+	rec := &store.SandboxRecord{
+		ID:                    "term-list",
+		TemplateName:          "nginx-persistent",
+		TemplateVersion:       1,
+		Image:                 "nginx:alpine",
+		CPU:                   "500m",
+		Memory:                "256Mi",
+		TTL:                   3600,
+		EnvJSON:               `{}`,
+		DesiredState:          store.DesiredStateDeleted,
+		LifecycleStatus:       "terminating",
+		StatusReason:          "delete requested",
+		ClusterNamespace:      "liteboxd-sandbox",
+		PodName:               "sandbox-term-list",
+		AccessTokenCiphertext: "invalid-ciphertext",
+		AccessTokenNonce:      "invalid-nonce",
+		AccessTokenKeyID:      "missing-key",
+		AccessTokenSHA256:     "hash",
+		AccessURL:             "http://gateway/term-list",
+		PersistenceEnabled:    true,
+		PersistenceMode:       "rootfs-overlay",
+		PersistenceSize:       "1Gi",
+		StorageClassName:      "longhorn",
+		VolumeClaimName:       "sandbox-data-term-list",
+		VolumeReclaimPolicy:   "Delete",
+		RuntimeKind:           "deployment",
+		RuntimeName:           "sandbox-term-list",
+		DeletionPhase:         store.DeletionPhaseQuiescingRuntime,
+		CreatedAt:             now,
+		ExpiresAt:             now.Add(time.Hour),
+		UpdatedAt:             now,
+	}
+	if err := sandboxStore.Create(ctx, rec); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	svc := &SandboxService{sandboxStore: sandboxStore}
+	resp, err := svc.ListForUser(ctx, true)
+	if err != nil {
+		t.Fatalf("ListForUser() error = %v", err)
+	}
+	if len(resp.Items) != 1 {
+		t.Fatalf("ListForUser() len = %d, want 1", len(resp.Items))
+	}
+	if resp.Items[0].ID != rec.ID {
+		t.Fatalf("ListForUser() id = %q, want %q", resp.Items[0].ID, rec.ID)
+	}
+	if resp.Items[0].Deletion == nil || resp.Items[0].Deletion.Phase != store.DeletionPhaseQuiescingRuntime {
+		t.Fatalf("ListForUser() deletion = %+v, want phase %q", resp.Items[0].Deletion, store.DeletionPhaseQuiescingRuntime)
+	}
+}
+
 // --- Start validation tests ---
 
 func TestStartNotFound(t *testing.T) {

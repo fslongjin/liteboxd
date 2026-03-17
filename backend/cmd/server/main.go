@@ -134,6 +134,7 @@ func main() {
 	}
 	sandboxStore := store.NewSandboxStore()
 	sandboxSvc := service.NewSandboxService(k8sClient, sandboxStore, tokenCipher)
+	deletionSvc := service.NewSandboxDeletionService(k8sClient, sandboxStore)
 	reconcileSvc := service.NewSandboxReconcileService(k8sClient, sandboxStore)
 	sandboxSvc.SetTemplateService(templateSvc)
 	templateSvc.SetPrepullService(prepullSvc)
@@ -156,10 +157,17 @@ func main() {
 	slog.Info("prepull status updater started", "component", "prepull_service", "interval", "10s")
 	reconcileSvc.Start(1 * time.Minute)
 	slog.Info("sandbox reconciler started", "component", "sandbox_reconciler", "interval", "1m")
+	deletionSvc.Start(10 * time.Second)
+	slog.Info("sandbox deletion reconciler started", "component", "sandbox_deletion", "interval", "10s")
 
 	go func() {
 		if _, err := reconcileSvc.Run(context.Background(), "startup"); err != nil {
 			slog.Warn("startup reconcile failed", "component", "sandbox_reconciler", "error", err)
+		}
+	}()
+	go func() {
+		if err := deletionSvc.RunPending(context.Background()); err != nil {
+			slog.Warn("startup deletion recovery failed", "component", "sandbox_deletion", "error", err)
 		}
 	}()
 
@@ -242,11 +250,20 @@ func main() {
 		}
 	}
 
+	writeTimeout := 60 * time.Second
+	if v := os.Getenv("WRITE_TIMEOUT"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			writeTimeout = d
+		} else {
+			slog.Warn("invalid WRITE_TIMEOUT, fallback to default", "value", v, "default", writeTimeout.String())
+		}
+	}
+
 	srv := &http.Server{
 		Addr:         ":" + port,
 		Handler:      r,
 		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 10 * time.Second,
+		WriteTimeout: writeTimeout,
 		IdleTimeout:  60 * time.Second,
 	}
 

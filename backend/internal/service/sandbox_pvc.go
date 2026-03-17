@@ -21,7 +21,7 @@ func (s *SandboxService) ListPVCMappings(ctx context.Context, opts model.PVCMapp
 		opts.PageSize = 100
 	}
 	if opts.State != "" && !isSupportedPVCMappingState(opts.State) {
-		return nil, fmt.Errorf("invalid state %q, expected one of [%s, %s, %s]", opts.State, model.PVCMappingStateBound, model.PVCMappingStateOrphanPVC, model.PVCMappingStateDanglingMeta)
+		return nil, fmt.Errorf("invalid state %q, expected one of [%s, %s, %s, %s]", opts.State, model.PVCMappingStateBound, model.PVCMappingStateOrphanPVC, model.PVCMappingStateDeleting, model.PVCMappingStateDanglingMeta)
 	}
 
 	records, err := s.sandboxStore.ListForReconcile(ctx)
@@ -58,7 +58,7 @@ func (s *SandboxService) ListPVCMappings(ctx context.Context, opts model.PVCMapp
 		item := model.PVCMapping{
 			PVCName:   pvcName,
 			Namespace: s.k8sClient.SandboxNamespace(),
-			State:     classifyPVCMappingState(hasDB, hasK8s),
+			State:     classifyPVCMappingState(rec, hasDB, hasK8s),
 			Source:    classifyPVCMappingSource(hasDB, hasK8s),
 		}
 
@@ -128,12 +128,27 @@ func buildDBPVCMap(records []store.SandboxRecord) map[string]*store.SandboxRecor
 		if rec.VolumeClaimName == "" {
 			continue
 		}
+		if shouldSkipPVCMappingRecord(rec) {
+			continue
+		}
 		existing, ok := out[rec.VolumeClaimName]
 		if !ok || rec.UpdatedAt.After(existing.UpdatedAt) {
 			out[rec.VolumeClaimName] = rec
 		}
 	}
 	return out
+}
+
+func shouldSkipPVCMappingRecord(rec *store.SandboxRecord) bool {
+	if rec == nil {
+		return true
+	}
+	// Once a Delete-policy sandbox is fully deleted, its PVC mapping should no longer
+	// appear in the operational PVC view. Any residual PVC after this point is an orphan.
+	return rec.DesiredState == store.DesiredStateDeleted &&
+		rec.LifecycleStatus == "deleted" &&
+		rec.DeletionPhase == store.DeletionPhaseCompleted &&
+		rec.VolumeReclaimPolicy == "Delete"
 }
 
 func buildK8sPVCMap(pvcs []corev1.PersistentVolumeClaim) map[string]*corev1.PersistentVolumeClaim {
@@ -147,19 +162,21 @@ func buildK8sPVCMap(pvcs []corev1.PersistentVolumeClaim) map[string]*corev1.Pers
 
 func isSupportedPVCMappingState(v string) bool {
 	switch v {
-	case model.PVCMappingStateBound, model.PVCMappingStateOrphanPVC, model.PVCMappingStateDanglingMeta:
+	case model.PVCMappingStateBound, model.PVCMappingStateOrphanPVC, model.PVCMappingStateDeleting, model.PVCMappingStateDanglingMeta:
 		return true
 	default:
 		return false
 	}
 }
 
-func classifyPVCMappingState(hasDB, hasK8s bool) string {
+func classifyPVCMappingState(rec *store.SandboxRecord, hasDB, hasK8s bool) string {
 	switch {
 	case hasDB && hasK8s:
 		return model.PVCMappingStateBound
 	case hasK8s:
 		return model.PVCMappingStateOrphanPVC
+	case hasDB && rec != nil && rec.DesiredState == store.DesiredStateDeleted && rec.LifecycleStatus == "terminating":
+		return model.PVCMappingStateDeleting
 	default:
 		return model.PVCMappingStateDanglingMeta
 	}

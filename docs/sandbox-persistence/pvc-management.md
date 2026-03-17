@@ -49,6 +49,7 @@ curl -s http://<liteboxd-host>/api/v1/sandboxes/metadata?page=1&page_size=100 \
 3. 给出对账状态：
    - `bound`：DB 与 K8s 都存在且一致
    - `orphan_pvc`：K8s 有 PVC，DB 无对应 active/deleted 记录
+   - `deleting`：DB 记录仍在删除中，PVC 已按预期删掉
    - `dangling_metadata`：DB 有记录，K8s 无 PVC
 4. 支持按命名空间、storageClass、sandboxId、状态筛选。
 
@@ -62,7 +63,7 @@ curl -s http://<liteboxd-host>/api/v1/sandboxes/metadata?page=1&page_size=100 \
 
 - `sandbox_id`（可选）
 - `storage_class`（可选）
-- `state`（可选，`bound|orphan_pvc|dangling_metadata`）
+- `state`（可选，`bound|orphan_pvc|deleting|dangling_metadata`）
 - `page` / `page_size`
 
 返回示例（核心字段）：
@@ -110,7 +111,8 @@ curl -s http://<liteboxd-host>/api/v1/sandboxes/metadata?page=1&page_size=100 \
 4. 按规则打 `state`：
    - DB + K8s 都有：`bound`
    - 仅 K8s：`orphan_pvc`
-   - 仅 DB：`dangling_metadata`
+   - 仅 DB 且 sandbox 正在 `terminating`：`deleting`
+   - 仅 DB 且不在删除中：`dangling_metadata`
 
 ## 6. 数据模型建议
 

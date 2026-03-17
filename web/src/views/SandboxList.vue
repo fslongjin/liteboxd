@@ -385,7 +385,7 @@ const createFromTemplate = async () => {
 const deleteSandbox = async (id: string) => {
   try {
     await sandboxApi.delete(id)
-    MessagePlugin.success('删除成功')
+    MessagePlugin.success('已提交删除，后台正在清理资源')
     loadSandboxes()
   } catch (err: any) {
     MessagePlugin.error('删除失败: ' + (err.response?.data?.error || err.message))

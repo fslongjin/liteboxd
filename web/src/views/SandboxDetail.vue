@@ -75,6 +75,18 @@
           <t-descriptions-item label="过期时间">{{
             sandbox.ttl === 0 ? '永久' : formatTime(sandbox.expires_at)
           }}</t-descriptions-item>
+          <t-descriptions-item label="删除阶段">{{
+            sandbox.deletion?.phase || '-'
+          }}</t-descriptions-item>
+          <t-descriptions-item label="强删等级">{{
+            sandbox.deletion?.forceLevel ?? '-'
+          }}</t-descriptions-item>
+          <t-descriptions-item label="最近删除尝试">{{
+            formatTime(sandbox.deletion?.lastAttemptAt || '')
+          }}</t-descriptions-item>
+          <t-descriptions-item label="删除错误">{{
+            sandbox.deletion?.lastError || '-'
+          }}</t-descriptions-item>
         </t-descriptions>
       </t-loading>
     </t-card>
@@ -415,7 +427,7 @@ const startSandbox = async () => {
 const deleteSandbox = async () => {
   try {
     await sandboxApi.delete(sandboxId)
-    MessagePlugin.success('删除成功')
+    MessagePlugin.success('已提交删除，后台正在清理资源')
     router.push('/sandboxes')
   } catch (err: any) {
     MessagePlugin.error('删除失败: ' + (err.response?.data?.error || err.message))

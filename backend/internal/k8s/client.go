@@ -17,6 +17,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
@@ -30,6 +31,8 @@ const (
 	DefaultControlNamespace = "liteboxd-system"
 	LabelApp                = "liteboxd"
 	LabelSandboxID          = "sandbox-id"
+	LabelManagedBy          = "liteboxd.io/managed-by"
+	ManagedByServer         = "liteboxd-server"
 	AnnotationTTL           = "liteboxd/ttl"
 	AnnotationCreatedAt     = "liteboxd/created-at"
 )
@@ -231,6 +234,7 @@ func (c *Client) CreatePod(ctx context.Context, opts CreatePodOptions) (*corev1.
 	labels := map[string]string{
 		"app":          LabelApp,
 		LabelSandboxID: opts.ID,
+		LabelManagedBy: ManagedByServer,
 	}
 
 	if opts.Network != nil && opts.Network.AllowInternetAccess && len(opts.Network.AllowedDomains) == 0 {
@@ -294,6 +298,34 @@ func (c *Client) ListPods(ctx context.Context) (*corev1.PodList, error) {
 func (c *Client) DeletePod(ctx context.Context, sandboxID string) error {
 	podName := fmt.Sprintf("sandbox-%s", sandboxID)
 	return c.clientset.CoreV1().Pods(c.sandboxNS).Delete(ctx, podName, metav1.DeleteOptions{})
+}
+
+func (c *Client) ListSandboxPods(ctx context.Context, sandboxID string) ([]corev1.Pod, error) {
+	selector := labels.Set{
+		"app":          LabelApp,
+		LabelSandboxID: sandboxID,
+	}.AsSelector().String()
+	list, err := c.clientset.CoreV1().Pods(c.sandboxNS).List(ctx, metav1.ListOptions{LabelSelector: selector})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list sandbox pods: %w", err)
+	}
+	if list.Items == nil {
+		return []corev1.Pod{}, nil
+	}
+	return list.Items, nil
+}
+
+func (c *Client) ForceDeletePodByName(ctx context.Context, name string) error {
+	zero := int64(0)
+	policy := metav1.DeletePropagationBackground
+	err := c.clientset.CoreV1().Pods(c.sandboxNS).Delete(ctx, name, metav1.DeleteOptions{
+		GracePeriodSeconds: &zero,
+		PropagationPolicy:  &policy,
+	})
+	if err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("failed to force delete pod %s: %w", name, err)
+	}
+	return nil
 }
 
 type ExecResult struct {

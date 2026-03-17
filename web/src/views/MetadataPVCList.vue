@@ -23,6 +23,7 @@
             <t-select v-model="filters.state" clearable placeholder="状态">
               <t-option value="bound" label="bound" />
               <t-option value="orphan_pvc" label="orphan_pvc" />
+              <t-option value="deleting" label="deleting" />
               <t-option value="dangling_metadata" label="dangling_metadata" />
             </t-select>
           </t-col>
@@ -74,7 +75,7 @@ const rows = ref<PVCMapping[]>([])
 const filters = reactive({
   sandbox_id: '',
   storage_class: '',
-  state: '' as '' | 'bound' | 'orphan_pvc' | 'dangling_metadata',
+  state: '' as '' | 'bound' | 'orphan_pvc' | 'deleting' | 'dangling_metadata',
 })
 
 const pagination = reactive({
@@ -103,6 +104,8 @@ const stateTheme = (state: string) => {
       return 'success'
     case 'orphan_pvc':
       return 'warning'
+    case 'deleting':
+      return 'primary'
     case 'dangling_metadata':
       return 'danger'
     default:

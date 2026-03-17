@@ -12,6 +12,13 @@ import (
 const (
 	DesiredStateActive  = "active"
 	DesiredStateDeleted = "deleted"
+
+	DeletionPhaseRequested        = "requested"
+	DeletionPhaseQuiescingRuntime = "quiescing_runtime"
+	DeletionPhaseDeletingStorage  = "deleting_storage"
+	DeletionPhaseForceCleanup     = "force_cleanup"
+	DeletionPhaseVerifying        = "verifying"
+	DeletionPhaseCompleted        = "completed"
 )
 
 // SandboxRecord persists sandbox metadata as control-plane source of truth.
@@ -46,6 +53,13 @@ type SandboxRecord struct {
 	VolumeReclaimPolicy   string
 	RuntimeKind           string
 	RuntimeName           string
+	DeletionPhase         string
+	DeletionStartedAt     *time.Time
+	DeletionLastAttemptAt *time.Time
+	DeletionNextRetryAt   *time.Time
+	DeletionAttempts      int
+	DeletionForceLevel    int
+	DeletionLastError     string
 	CreatedAt             time.Time
 	ExpiresAt             time.Time
 	UpdatedAt             time.Time
@@ -101,6 +115,7 @@ type SandboxMetadataQuery struct {
 	CreatedTo       *time.Time
 	DeletedFrom     *time.Time
 	DeletedTo       *time.Time
+	DeletionPhase   string
 	Page            int
 	PageSize        int
 }
@@ -134,14 +149,16 @@ func (s *SandboxStore) Create(ctx context.Context, rec *SandboxRecord) error {
 			access_token_ciphertext, access_token_nonce, access_token_key_id, access_token_sha256, access_url,
 			persistence_enabled, persistence_mode, persistence_size, storage_class_name, volume_claim_name, volume_reclaim_policy,
 			runtime_kind, runtime_name,
+			deletion_phase, deletion_started_at, deletion_last_attempt_at, deletion_next_retry_at, deletion_attempts, deletion_force_level, deletion_last_error,
 			created_at, expires_at, updated_at, deleted_at, stopped_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, rec.ID, rec.TemplateName, rec.TemplateVersion, rec.Image, rec.CPU, rec.Memory, rec.TTL, rec.EnvJSON,
 		rec.DesiredState, rec.LifecycleStatus, rec.StatusReason,
 		rec.ClusterNamespace, rec.PodName, rec.PodUID, rec.PodPhase, rec.PodIP, toNullTime(rec.LastSeenAt),
 		rec.AccessTokenCiphertext, rec.AccessTokenNonce, rec.AccessTokenKeyID, rec.AccessTokenSHA256, rec.AccessURL,
 		rec.PersistenceEnabled, rec.PersistenceMode, rec.PersistenceSize, rec.StorageClassName, rec.VolumeClaimName, rec.VolumeReclaimPolicy,
 		rec.RuntimeKind, rec.RuntimeName,
+		rec.DeletionPhase, toNullTime(rec.DeletionStartedAt), toNullTime(rec.DeletionLastAttemptAt), toNullTime(rec.DeletionNextRetryAt), rec.DeletionAttempts, rec.DeletionForceLevel, rec.DeletionLastError,
 		rec.CreatedAt, rec.ExpiresAt, rec.UpdatedAt, toNullTime(rec.DeletedAt), toNullTime(rec.StoppedAt),
 	)
 	if err != nil {
@@ -164,11 +181,29 @@ func (s *SandboxStore) GetByID(ctx context.Context, id string) (*SandboxRecord, 
 
 func (s *SandboxStore) ListActive(ctx context.Context) ([]SandboxRecord, error) {
 	rows, err := s.db.QueryContext(ctx, sandboxSelectSQL+`
-		 WHERE desired_state = ? AND lifecycle_status <> ?
-		 ORDER BY created_at DESC
-	`, DesiredStateActive, "deleted")
+         WHERE desired_state = ? AND lifecycle_status <> ?
+         ORDER BY created_at DESC
+    `, DesiredStateActive, "deleted")
 	if err != nil {
 		return nil, fmt.Errorf("failed to list active sandboxes: %w", err)
+	}
+	defer rows.Close()
+	return scanSandboxRows(rows)
+}
+
+// ListForUser returns items visible to end users. When includeTerminating is true,
+// it includes sandboxes under deletion (desired=deleted, lifecycle=terminating).
+func (s *SandboxStore) ListForUser(ctx context.Context, includeTerminating bool) ([]SandboxRecord, error) {
+	where := `WHERE (desired_state = ? AND lifecycle_status <> ?)`
+	args := []any{DesiredStateActive, "deleted"}
+	if includeTerminating {
+		where += ` OR (desired_state = ? AND lifecycle_status = ?)`
+		args = append(args, DesiredStateDeleted, "terminating")
+	}
+	query := sandboxSelectSQL + " " + where + " ORDER BY created_at DESC"
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list user sandboxes: %w", err)
 	}
 	defer rows.Close()
 	return scanSandboxRows(rows)
@@ -230,6 +265,10 @@ func (s *SandboxStore) ListMetadata(ctx context.Context, query SandboxMetadataQu
 		where = append(where, "deleted_at IS NOT NULL", "deleted_at <= ?")
 		args = append(args, *query.DeletedTo)
 	}
+	if query.DeletionPhase != "" {
+		where = append(where, "deletion_phase = ?")
+		args = append(args, query.DeletionPhase)
+	}
 
 	whereSQL := ""
 	if len(where) > 0 {
@@ -285,16 +324,77 @@ func (s *SandboxStore) SetDesiredDeleted(ctx context.Context, id string, now tim
 	return nil
 }
 
-func (s *SandboxStore) MarkDeleted(ctx context.Context, id, reason string, now time.Time) error {
+func (s *SandboxStore) MarkDeletionRequested(ctx context.Context, id string, now time.Time) error {
 	_, err := s.db.ExecContext(ctx, `
 		UPDATE sandboxes
-		SET desired_state = ?, lifecycle_status = ?, status_reason = ?, deleted_at = ?, updated_at = ?
+		SET desired_state = ?, lifecycle_status = ?, status_reason = ?, deleted_at = NULL,
+		    deletion_phase = ?, deletion_started_at = COALESCE(deletion_started_at, ?),
+		    deletion_last_attempt_at = NULL, deletion_next_retry_at = ?, deletion_attempts = 0,
+		    deletion_force_level = 0, deletion_last_error = '', updated_at = ?
 		WHERE id = ?
-	`, DesiredStateDeleted, "deleted", reason, now, now, id)
+		  AND lifecycle_status <> ?
+	`, DesiredStateDeleted, "terminating", "delete requested", DeletionPhaseRequested, now, now, now, id, "deleted")
 	if err != nil {
-		return fmt.Errorf("failed to mark deleted: %w", err)
+		return fmt.Errorf("failed to mark deletion requested: %w", err)
 	}
 	return nil
+}
+
+func (s *SandboxStore) AdvanceDeletionPhase(ctx context.Context, id, phase string, now time.Time) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE sandboxes
+		SET deletion_phase = ?, updated_at = ?
+		WHERE id = ?
+	`, phase, now, id)
+	if err != nil {
+		return fmt.Errorf("failed to advance deletion phase: %w", err)
+	}
+	return nil
+}
+
+func (s *SandboxStore) RecordDeletionAttempt(ctx context.Context, id string, attempts, forceLevel int, lastAttempt, nextRetry *time.Time, lastError string, now time.Time) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE sandboxes
+		SET deletion_last_attempt_at = ?, deletion_next_retry_at = ?, deletion_attempts = ?,
+		    deletion_force_level = ?, deletion_last_error = ?, updated_at = ?
+		WHERE id = ?
+	`, toNullTime(lastAttempt), toNullTime(nextRetry), attempts, forceLevel, lastError, now, id)
+	if err != nil {
+		return fmt.Errorf("failed to record deletion attempt: %w", err)
+	}
+	return nil
+}
+
+func (s *SandboxStore) MarkDeletionCompleted(ctx context.Context, id, reason string, now time.Time) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE sandboxes
+		SET desired_state = ?, lifecycle_status = ?, status_reason = ?, deleted_at = ?, updated_at = ?,
+		    deletion_phase = ?, deletion_next_retry_at = NULL, deletion_last_error = ''
+		WHERE id = ?
+	`, DesiredStateDeleted, "deleted", reason, now, now, DeletionPhaseCompleted, id)
+	if err != nil {
+		return fmt.Errorf("failed to mark deletion completed: %w", err)
+	}
+	return nil
+}
+
+func (s *SandboxStore) ListPendingDeletion(ctx context.Context, now time.Time) ([]SandboxRecord, error) {
+	rows, err := s.db.QueryContext(ctx, sandboxSelectSQL+`
+		 WHERE desired_state = ?
+		   AND lifecycle_status <> ?
+		   AND deletion_phase <> ?
+		   AND (deletion_next_retry_at IS NULL OR deletion_next_retry_at <= ?)
+		 ORDER BY updated_at ASC
+	`, DesiredStateDeleted, "deleted", DeletionPhaseCompleted, now)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list pending deletion sandboxes: %w", err)
+	}
+	defer rows.Close()
+	return scanSandboxRows(rows)
+}
+
+func (s *SandboxStore) MarkDeleted(ctx context.Context, id, reason string, now time.Time) error {
+	return s.MarkDeletionCompleted(ctx, id, reason, now)
 }
 
 func (s *SandboxStore) UpdateStatus(ctx context.Context, id, status, reason string, now time.Time) error {
@@ -611,9 +711,10 @@ func (s *SandboxStore) PurgeHistoricalData(ctx context.Context, cutoff time.Time
 	res, err = tx.ExecContext(ctx, `
 		DELETE FROM sandboxes
 		WHERE lifecycle_status = 'deleted'
+		  AND (deletion_phase = ? OR deletion_phase = '')
 		  AND deleted_at IS NOT NULL
 		  AND deleted_at < ?
-	`, cutoff)
+	`, DeletionPhaseCompleted, cutoff)
 	if err != nil {
 		return nil, fmt.Errorf("failed to purge deleted sandboxes: %w", err)
 	}
@@ -633,6 +734,7 @@ SELECT
 	access_token_ciphertext, access_token_nonce, access_token_key_id, access_token_sha256, access_url,
 	persistence_enabled, persistence_mode, persistence_size, storage_class_name, volume_claim_name, volume_reclaim_policy,
 	runtime_kind, runtime_name,
+	deletion_phase, deletion_started_at, deletion_last_attempt_at, deletion_next_retry_at, deletion_attempts, deletion_force_level, deletion_last_error,
 	created_at, expires_at, updated_at, deleted_at, stopped_at
 FROM sandboxes`
 
@@ -641,6 +743,9 @@ func scanSandbox(row interface{ Scan(dest ...any) error }) (*SandboxRecord, erro
 	var lastSeenAt sql.NullTime
 	var deletedAt sql.NullTime
 	var stoppedAt sql.NullTime
+	var deletionStartedAt sql.NullTime
+	var deletionLastAttemptAt sql.NullTime
+	var deletionNextRetryAt sql.NullTime
 	if err := row.Scan(
 		&rec.ID, &rec.TemplateName, &rec.TemplateVersion, &rec.Image, &rec.CPU, &rec.Memory, &rec.TTL, &rec.EnvJSON,
 		&rec.DesiredState, &rec.LifecycleStatus, &rec.StatusReason,
@@ -648,6 +753,7 @@ func scanSandbox(row interface{ Scan(dest ...any) error }) (*SandboxRecord, erro
 		&rec.AccessTokenCiphertext, &rec.AccessTokenNonce, &rec.AccessTokenKeyID, &rec.AccessTokenSHA256, &rec.AccessURL,
 		&rec.PersistenceEnabled, &rec.PersistenceMode, &rec.PersistenceSize, &rec.StorageClassName, &rec.VolumeClaimName, &rec.VolumeReclaimPolicy,
 		&rec.RuntimeKind, &rec.RuntimeName,
+		&rec.DeletionPhase, &deletionStartedAt, &deletionLastAttemptAt, &deletionNextRetryAt, &rec.DeletionAttempts, &rec.DeletionForceLevel, &rec.DeletionLastError,
 		&rec.CreatedAt, &rec.ExpiresAt, &rec.UpdatedAt, &deletedAt, &stoppedAt,
 	); err != nil {
 		return nil, err
@@ -663,6 +769,18 @@ func scanSandbox(row interface{ Scan(dest ...any) error }) (*SandboxRecord, erro
 	if stoppedAt.Valid {
 		t := stoppedAt.Time
 		rec.StoppedAt = &t
+	}
+	if deletionStartedAt.Valid {
+		t := deletionStartedAt.Time
+		rec.DeletionStartedAt = &t
+	}
+	if deletionLastAttemptAt.Valid {
+		t := deletionLastAttemptAt.Time
+		rec.DeletionLastAttemptAt = &t
+	}
+	if deletionNextRetryAt.Valid {
+		t := deletionNextRetryAt.Time
+		rec.DeletionNextRetryAt = &t
 	}
 	return &rec, nil
 }

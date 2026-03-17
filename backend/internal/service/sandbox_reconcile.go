@@ -10,7 +10,6 @@ import (
 	"github.com/fslongjin/liteboxd/backend/internal/model"
 	"github.com/fslongjin/liteboxd/backend/internal/store"
 	"github.com/google/uuid"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
 
 const (
@@ -370,15 +369,11 @@ func (s *SandboxReconcileService) reconcileDeletedSandbox(ctx context.Context, r
 	if _, ok := podMap[rec.ID]; ok {
 		delete(podMap, rec.ID)
 		result.drifted = true
-		if err := s.k8sClient.DeletePod(ctx, rec.ID); err != nil && !apierrors.IsNotFound(err) {
-			return result, err
-		}
-		result.fixed = true
 		_ = s.sandboxStore.AddReconcileItem(ctx, &store.ReconcileItemRecord{
 			RunID:     runID,
 			SandboxID: rec.ID,
 			DriftType: "status_mismatch",
-			Action:    "retry_delete",
+			Action:    "deletion_pending",
 			Detail:    "delete convergence in progress: residual pod found",
 			CreatedAt: time.Now().UTC(),
 		})
@@ -386,10 +381,14 @@ func (s *SandboxReconcileService) reconcileDeletedSandbox(ctx context.Context, r
 	}
 	if rec.LifecycleStatus != "deleted" {
 		result.drifted = true
-		if err := s.sandboxStore.MarkDeleted(ctx, rec.ID, "reconcile: deleted sandbox converged", time.Now().UTC()); err == nil {
-			result.fixed = true
-			_ = s.sandboxStore.AppendStatusHistory(ctx, rec.ID, "reconcile", rec.LifecycleStatus, "deleted", "reconcile: deleted sandbox converged", nil, time.Now().UTC())
-		}
+		_ = s.sandboxStore.AddReconcileItem(ctx, &store.ReconcileItemRecord{
+			RunID:     runID,
+			SandboxID: rec.ID,
+			DriftType: "status_mismatch",
+			Action:    "deletion_pending",
+			Detail:    "delete requested with no residual pod; deletion service should complete",
+			CreatedAt: time.Now().UTC(),
+		})
 	}
 	return result, nil
 }
@@ -405,10 +404,6 @@ func (s *SandboxReconcileService) reconcileDeletedPersistentSandbox(ctx context.
 
 	if hasResidual {
 		result.drifted = true
-		if err := s.k8sClient.DeletePersistentSandbox(ctx, rec.ID, rec.VolumeClaimName, rec.VolumeReclaimPolicy); err != nil {
-			return result, err
-		}
-		result.fixed = true
 		detail := "delete convergence in progress"
 		switch {
 		case hasResidualPVC:
@@ -422,7 +417,7 @@ func (s *SandboxReconcileService) reconcileDeletedPersistentSandbox(ctx context.
 			RunID:     runID,
 			SandboxID: rec.ID,
 			DriftType: "status_mismatch",
-			Action:    "retry_delete",
+			Action:    "deletion_pending",
 			Detail:    detail,
 			CreatedAt: now,
 		})
@@ -431,10 +426,14 @@ func (s *SandboxReconcileService) reconcileDeletedPersistentSandbox(ctx context.
 
 	if rec.LifecycleStatus != "deleted" {
 		result.drifted = true
-		if err := s.sandboxStore.MarkDeleted(ctx, rec.ID, "reconcile: persistent runtime deleted", now); err == nil {
-			result.fixed = true
-			_ = s.sandboxStore.AppendStatusHistory(ctx, rec.ID, "reconcile", rec.LifecycleStatus, "deleted", "reconcile: persistent runtime deleted", nil, now)
-		}
+		_ = s.sandboxStore.AddReconcileItem(ctx, &store.ReconcileItemRecord{
+			RunID:     runID,
+			SandboxID: rec.ID,
+			DriftType: "status_mismatch",
+			Action:    "deletion_pending",
+			Detail:    "delete requested with no residual runtime; deletion service should complete",
+			CreatedAt: now,
+		})
 	}
 	return result, nil
 }
