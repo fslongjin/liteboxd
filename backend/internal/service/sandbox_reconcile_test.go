@@ -27,7 +27,10 @@ func persistentRecord(id, lifecycle, reason string) *store.SandboxRecord {
 }
 
 func persistentObjects(id string, podPhase corev1.PodPhase, ready bool) []runtime.Object {
-	replicas := int32(1)
+	return persistentObjectsWithReplicas(id, 1, podPhase, ready)
+}
+
+func persistentObjectsWithReplicas(id string, replicas int32, podPhase corev1.PodPhase, ready bool) []runtime.Object {
 	conditionStatus := corev1.ConditionFalse
 	if ready {
 		conditionStatus = corev1.ConditionTrue
@@ -193,6 +196,125 @@ func TestReconcilePersistentReadyIgnoresHistoricalSchedulingWarning(t *testing.T
 	}
 	if got.StatusReason != "" {
 		t.Fatalf("StatusReason = %q, want empty", got.StatusReason)
+	}
+}
+
+func TestReconcilePersistentStoppedKeepsStoppedAndCleansResidualCompletedPod(t *testing.T) {
+	initServiceTestDB(t)
+	ctx := context.Background()
+	sandboxStore := store.NewSandboxStore()
+	now := time.Now().UTC().Add(-10 * time.Minute)
+
+	rec := persistentRecord("recon-stop-clean", "stopped", "stopped by request")
+	rec.StoppedAt = &now
+	if err := sandboxStore.Create(ctx, rec); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	client := k8s.NewClientForTest(persistentObjectsWithReplicas("recon-stop-clean", 0, corev1.PodSucceeded, false)...)
+	svc := NewSandboxReconcileService(client, sandboxStore)
+	if _, err := svc.Run(ctx, "manual"); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	got, err := sandboxStore.GetByID(ctx, rec.ID)
+	if err != nil {
+		t.Fatalf("GetByID() error = %v", err)
+	}
+	if got.LifecycleStatus != "stopped" {
+		t.Fatalf("LifecycleStatus = %q, want stopped", got.LifecycleStatus)
+	}
+	if got.PodPhase != "" || got.PodUID != "" || got.PodIP != "" {
+		t.Fatalf("pod metadata should be cleared for stopped sandbox, got phase=%q uid=%q ip=%q", got.PodPhase, got.PodUID, got.PodIP)
+	}
+	if got.StoppedAt == nil {
+		t.Fatalf("StoppedAt is nil, want preserved")
+	}
+	if _, err := client.GetPod(ctx, rec.ID); !apierrors.IsNotFound(err) {
+		t.Fatalf("expected residual pod to be deleted, got err=%v", err)
+	}
+
+	run, err := svc.ListRuns(ctx, 1)
+	if err != nil {
+		t.Fatalf("ListRuns() error = %v", err)
+	}
+	detail, err := svc.GetRun(ctx, run.Items[0].ID)
+	if err != nil {
+		t.Fatalf("GetRun() error = %v", err)
+	}
+	foundCleanup := false
+	for _, item := range detail.Items {
+		if item.SandboxID == rec.ID && item.Action == "cleanup_residual_pod" {
+			foundCleanup = true
+		}
+	}
+	if !foundCleanup {
+		t.Fatalf("expected cleanup_residual_pod reconcile item")
+	}
+}
+
+func TestReconcilePersistentStoppedRemainsStartableAfterResidualCompletedPod(t *testing.T) {
+	initServiceTestDB(t)
+	ctx := context.Background()
+	sandboxStore := store.NewSandboxStore()
+	now := time.Now().UTC().Add(-15 * time.Minute)
+
+	rec := persistentRecord("recon-stop-start", "stopped", "stopped by request")
+	rec.StoppedAt = &now
+	rec.ExpiresAt = time.Now().UTC().Add(15 * time.Minute)
+	if err := sandboxStore.Create(ctx, rec); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	client := k8s.NewClientForTest(persistentObjectsWithReplicas("recon-stop-start", 0, corev1.PodSucceeded, false)...)
+	reconcileSvc := NewSandboxReconcileService(client, sandboxStore)
+	if _, err := reconcileSvc.Run(ctx, "manual"); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	svc := &SandboxService{sandboxStore: sandboxStore, k8sClient: client}
+	if err := svc.Start(ctx, rec.ID); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	got, err := sandboxStore.GetByID(ctx, rec.ID)
+	if err != nil {
+		t.Fatalf("GetByID() error = %v", err)
+	}
+	if got.LifecycleStatus != "pending" {
+		t.Fatalf("LifecycleStatus = %q, want pending", got.LifecycleStatus)
+	}
+	deploy, err := client.GetDeployment(ctx, "sandbox-"+rec.ID)
+	if err != nil {
+		t.Fatalf("GetDeployment() error = %v", err)
+	}
+	if deploy.Spec.Replicas == nil || *deploy.Spec.Replicas != 1 {
+		t.Fatalf("deployment replicas = %v, want 1", deploy.Spec.Replicas)
+	}
+}
+
+func TestReconcilePersistentSucceededPodWithReplicasOneDoesNotPretendStopped(t *testing.T) {
+	initServiceTestDB(t)
+	ctx := context.Background()
+	sandboxStore := store.NewSandboxStore()
+
+	rec := persistentRecord("recon-succeed-running", "running", "")
+	if err := sandboxStore.Create(ctx, rec); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	client := k8s.NewClientForTest(persistentObjectsWithReplicas("recon-succeed-running", 1, corev1.PodSucceeded, false)...)
+	svc := NewSandboxReconcileService(client, sandboxStore)
+	if _, err := svc.Run(ctx, "manual"); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	got, err := sandboxStore.GetByID(ctx, rec.ID)
+	if err != nil {
+		t.Fatalf("GetByID() error = %v", err)
+	}
+	if got.LifecycleStatus == "stopped" {
+		t.Fatalf("LifecycleStatus = %q, should not be forced to stopped when deployment replicas is 1", got.LifecycleStatus)
 	}
 }
 

@@ -4,12 +4,15 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/fslongjin/liteboxd/backend/internal/k8s"
 	"github.com/fslongjin/liteboxd/backend/internal/model"
 	"github.com/fslongjin/liteboxd/backend/internal/store"
 	"github.com/google/uuid"
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
 
 const (
@@ -266,6 +269,10 @@ func (s *SandboxReconcileService) reconcilePersistentSandbox(ctx context.Context
 		return result, nil
 	}
 
+	if shouldTreatPersistentSandboxAsStopped(rec, snapshot) {
+		return s.reconcileStoppedPersistentSandbox(ctx, runID, rec, snapshot)
+	}
+
 	state, reason := classifyPersistentStartup(snapshot)
 	switch state {
 	case persistentStartupReady:
@@ -362,6 +369,105 @@ func (s *SandboxReconcileService) reconcilePersistentSandbox(ctx context.Context
 	}
 
 	return result, nil
+}
+
+func shouldTreatPersistentSandboxAsStopped(rec *store.SandboxRecord, snapshot *k8s.PersistentSandboxSnapshot) bool {
+	if rec == nil || snapshot == nil || snapshot.Deployment == nil {
+		return false
+	}
+	if strings.TrimSpace(rec.LifecycleStatus) != string(model.SandboxStatusStopped) && rec.StoppedAt == nil {
+		return false
+	}
+	if snapshot.Deployment.Spec.Replicas == nil {
+		return false
+	}
+	return *snapshot.Deployment.Spec.Replicas == 0
+}
+
+func (s *SandboxReconcileService) reconcileStoppedPersistentSandbox(ctx context.Context, runID string, rec *store.SandboxRecord, snapshot *k8s.PersistentSandboxSnapshot) (reconcileResult, error) {
+	result := reconcileResult{}
+	now := time.Now().UTC()
+	statusReason := strings.TrimSpace(rec.StatusReason)
+	if statusReason == "" {
+		statusReason = "stopped by request"
+	}
+
+	if snapshot.Pod != nil && isTerminalOrDeletingPod(snapshot.Pod) {
+		result.drifted = true
+		action := "cleanup_residual_pod"
+		if err := s.k8sClient.DeletePodByName(ctx, snapshot.Pod.Name); err != nil && !apierrors.IsNotFound(err) {
+			action = "cleanup_failed"
+			_ = s.sandboxStore.AddReconcileItem(ctx, &store.ReconcileItemRecord{
+				RunID:     runID,
+				SandboxID: rec.ID,
+				DriftType: "status_mismatch",
+				Action:    action,
+				Detail:    fmt.Sprintf("stopped sandbox keeps residual pod %s in phase %s: %v", snapshot.Pod.Name, snapshot.Pod.Status.Phase, err),
+				CreatedAt: now,
+			})
+			return result, err
+		}
+		result.fixed = true
+		_ = s.sandboxStore.AddReconcileItem(ctx, &store.ReconcileItemRecord{
+			RunID:     runID,
+			SandboxID: rec.ID,
+			DriftType: "status_mismatch",
+			Action:    action,
+			Detail:    fmt.Sprintf("stopped sandbox cleaned residual pod %s in phase %s", snapshot.Pod.Name, snapshot.Pod.Status.Phase),
+			CreatedAt: now,
+		})
+	}
+
+	podUID, podPhase, podIP := "", "", ""
+	if rec.LifecycleStatus != string(model.SandboxStatusStopped) || rec.StatusReason != statusReason || rec.PodUID != podUID || rec.PodPhase != podPhase || rec.PodIP != podIP {
+		result.drifted = true
+		if updated, err := s.sandboxStore.UpdateObservedStateIfActive(
+			ctx,
+			rec.ID,
+			podUID,
+			podPhase,
+			podIP,
+			string(model.SandboxStatusStopped),
+			statusReason,
+			now,
+			now,
+		); err == nil && updated {
+			if rec.StoppedAt == nil {
+				_ = s.sandboxStore.EnsureStoppedAt(ctx, rec.ID, now)
+			}
+			result.fixed = true
+			if rec.LifecycleStatus != string(model.SandboxStatusStopped) {
+				_ = s.sandboxStore.AppendStatusHistory(ctx, rec.ID, "reconcile", rec.LifecycleStatus, string(model.SandboxStatusStopped), "reconcile: deployment scaled to zero", nil, now)
+			}
+		} else if err != nil {
+			return result, err
+		}
+		_ = s.sandboxStore.AddReconcileItem(ctx, &store.ReconcileItemRecord{
+			RunID:     runID,
+			SandboxID: rec.ID,
+			DriftType: "status_mismatch",
+			Action:    "preserve_stopped",
+			Detail:    "persistent sandbox remains stopped because deployment replicas is 0",
+			CreatedAt: now,
+		})
+	}
+
+	return result, nil
+}
+
+func isTerminalOrDeletingPod(pod *corev1.Pod) bool {
+	if pod == nil {
+		return false
+	}
+	if pod.DeletionTimestamp != nil {
+		return true
+	}
+	switch pod.Status.Phase {
+	case corev1.PodSucceeded, corev1.PodFailed:
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *SandboxReconcileService) reconcileDeletedSandbox(ctx context.Context, runID string, rec *store.SandboxRecord, podMap map[string]int) (reconcileResult, error) {
