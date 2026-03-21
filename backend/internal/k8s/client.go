@@ -38,9 +38,10 @@ const (
 )
 
 type ClientConfig struct {
-	KubeconfigPath   string
-	SandboxNamespace string
-	ControlNamespace string
+	KubeconfigPath              string
+	SandboxNamespace            string
+	ControlNamespace            string
+	PersistentRootFSHelperImage string
 }
 
 func (cfg ClientConfig) applyDefaults() ClientConfig {
@@ -49,6 +50,9 @@ func (cfg ClientConfig) applyDefaults() ClientConfig {
 	}
 	if cfg.ControlNamespace == "" {
 		cfg.ControlNamespace = DefaultControlNamespace
+	}
+	if cfg.PersistentRootFSHelperImage == "" {
+		cfg.PersistentRootFSHelperImage = DefaultPersistentRootFSHelperImage
 	}
 	return cfg
 }
@@ -59,6 +63,8 @@ type Client struct {
 	config        *rest.Config
 	sandboxNS     string
 	controlNS     string
+
+	persistentRootFSHelperImage string
 }
 
 func NewClient(cfg ClientConfig) (*Client, error) {
@@ -87,11 +93,12 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 	}
 
 	return &Client{
-		clientset:     clientset,
-		dynamicClient: dynamicClient,
-		config:        config,
-		sandboxNS:     cfg.SandboxNamespace,
-		controlNS:     cfg.ControlNamespace,
+		clientset:                   clientset,
+		dynamicClient:               dynamicClient,
+		config:                      config,
+		sandboxNS:                   cfg.SandboxNamespace,
+		controlNS:                   cfg.ControlNamespace,
+		persistentRootFSHelperImage: cfg.PersistentRootFSHelperImage,
 	}, nil
 }
 
@@ -340,7 +347,7 @@ type ExecResult struct {
 
 func isPersistentRootFSPod(pod *corev1.Pod) bool {
 	for _, c := range pod.Spec.InitContainers {
-		if c.Name == rootfsOverlayInitName {
+		if c.Name == rootfsOverlayPrepInitName {
 			return true
 		}
 	}

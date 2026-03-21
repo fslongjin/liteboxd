@@ -74,6 +74,11 @@ spec:
                 configMapKeyRef:
                   name: liteboxd-config
                   key: SANDBOX_METADATA_RETENTION_DAYS
+            - name: PERSISTENT_ROOTFS_HELPER_IMAGE
+              valueFrom:
+                configMapKeyRef:
+                  name: liteboxd-config
+                  key: PERSISTENT_ROOTFS_HELPER_IMAGE
             - name: SHUTDOWN_TIMEOUT
               value: 120s
             - name: LOG_LEVEL

@@ -35,13 +35,18 @@ type SandboxDeletionSnapshot struct {
 }
 
 const (
-	rootfsOverlayStateDir   = ".liteboxd-overlay"
-	rootfsOverlayMergedSub  = ".liteboxd-overlay/merged"
-	rootfsOverlayInitName   = "rootfs-init"
-	rootfsOverlayVolumeName = "rootfs"
+	DefaultPersistentRootFSHelperImage = "ubuntu:24.04"
+
+	rootfsOverlayStateDir          = ".liteboxd-overlay"
+	rootfsOverlayMergedSub         = ".liteboxd-overlay/merged"
+	rootfsOverlayPrepInitName      = "rootfs-prepare"
+	rootfsOverlayHelperName        = "rootfs-helper"
+	rootfsOverlayVolumeName        = "rootfs"
+	rootfsOverlayControlVolumeName = "rootfs-control"
 	// Hidden mount target to avoid leaking internal implementation details in normal `ls /`.
 	rootfsOverlayMountTarget = "/.liteboxd-rootfs"
 	rootfsOverlayMergedPath  = rootfsOverlayMountTarget + "/" + rootfsOverlayMergedSub
+	rootfsOverlayControlDir  = "/.liteboxd-control"
 )
 
 func (c *Client) getSandboxPod(ctx context.Context, sandboxID string) (*corev1.Pod, error) {
@@ -141,43 +146,84 @@ func (c *Client) CreatePersistentSandbox(ctx context.Context, opts CreatePersist
 	}
 
 	mainContainer := containerWithCommandAndArgs(opts.CreatePodOptions)
+	// containerWithCommandAndArgs adds the default /workspace mount for ephemeral sandboxes.
+	// Persistent rootfs sandboxes must replace it with rootfs-specific mounts only.
 	mainContainer.VolumeMounts = []corev1.VolumeMount{
 		{
-			Name:             rootfsOverlayVolumeName,
-			MountPath:        rootfsOverlayMountTarget,
-			MountPropagation: mountPropagationPtr(corev1.MountPropagationHostToContainer),
+			Name:      rootfsOverlayVolumeName,
+			MountPath: rootfsOverlayMountTarget,
+		},
+		{
+			Name:      rootfsOverlayControlVolumeName,
+			MountPath: rootfsOverlayControlDir,
 		},
 	}
+	mainContainer.Env = append(mainContainer.Env,
+		corev1.EnvVar{Name: "LITEBOXD_ROOTFS_CONTROL_DIR", Value: rootfsOverlayControlDir},
+		corev1.EnvVar{Name: "LITEBOXD_ROOTFS_MOUNT_TARGET", Value: rootfsOverlayMountTarget},
+	)
 	// Kubernetes/containerd cannot mount a volume directly to "/" in container rootfs.
-	// Run the main process in chroot(<merged overlay root>) to preserve rootfs semantics.
-	mainContainer.Command = append([]string{"chroot", rootfsOverlayMergedPath}, command...)
-	mainContainer.Args = args
+	// Keep the business container unprivileged and let it wait for a privileged helper to
+	// mount the overlay inside this container's mount namespace before chrooting.
+	mainContainer.Command = []string{"sh", "-ec", buildRootfsOverlayMainWrapperScript(), "rootfs-main"}
+	mainContainer.Args = append(append([]string(nil), command...), args...)
 
-	initContainer := corev1.Container{
-		Name:            rootfsOverlayInitName,
-		Image:           opts.Image,
+	prepInitContainer := corev1.Container{
+		Name:            rootfsOverlayPrepInitName,
+		Image:           c.persistentRootFSHelperImage,
 		ImagePullPolicy: corev1.PullIfNotPresent,
-		Command:         []string{"sh", "-ec", rootfsOverlayInitScript},
+		Command:         []string{"sh", "-ec", buildRootfsOverlayPrepScript()},
+		Resources: corev1.ResourceRequirements{
+			Limits: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse("100m"),
+				corev1.ResourceMemory: resource.MustParse("128Mi"),
+			},
+			Requests: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse("10m"),
+				corev1.ResourceMemory: resource.MustParse("32Mi"),
+			},
+		},
+		SecurityContext: &corev1.SecurityContext{
+			AllowPrivilegeEscalation: boolPtr(false),
+		},
+		VolumeMounts: []corev1.VolumeMount{
+			{
+				Name:      rootfsOverlayVolumeName,
+				MountPath: rootfsOverlayMountTarget,
+			},
+			{
+				Name:      rootfsOverlayControlVolumeName,
+				MountPath: rootfsOverlayControlDir,
+			},
+		},
+	}
+	helperContainer := corev1.Container{
+		Name:            rootfsOverlayHelperName,
+		Image:           c.persistentRootFSHelperImage,
+		ImagePullPolicy: corev1.PullIfNotPresent,
+		Command:         []string{"sh", "-ec", buildRootfsOverlayHelperScript()},
 		Resources: corev1.ResourceRequirements{
 			Limits: corev1.ResourceList{
 				corev1.ResourceCPU:    resource.MustParse("300m"),
 				corev1.ResourceMemory: resource.MustParse("256Mi"),
 			},
 			Requests: corev1.ResourceList{
-				corev1.ResourceCPU:    resource.MustParse("50m"),
+				corev1.ResourceCPU:    resource.MustParse("25m"),
 				corev1.ResourceMemory: resource.MustParse("64Mi"),
 			},
 		},
 		SecurityContext: &corev1.SecurityContext{
-			// Only the helper/init container is privileged to perform overlay mount.
 			Privileged:               boolPtr(true),
 			AllowPrivilegeEscalation: boolPtr(true),
 		},
 		VolumeMounts: []corev1.VolumeMount{
 			{
-				Name:             rootfsOverlayVolumeName,
-				MountPath:        rootfsOverlayMountTarget,
-				MountPropagation: mountPropagationPtr(corev1.MountPropagationBidirectional),
+				Name:      rootfsOverlayVolumeName,
+				MountPath: rootfsOverlayMountTarget,
+			},
+			{
+				Name:      rootfsOverlayControlVolumeName,
+				MountPath: rootfsOverlayControlDir,
 			},
 		},
 	}
@@ -226,8 +272,8 @@ func (c *Client) CreatePersistentSandbox(ctx context.Context, opts CreatePersist
 							Type: corev1.SeccompProfileTypeRuntimeDefault,
 						},
 					},
-					InitContainers: []corev1.Container{initContainer},
-					Containers:     []corev1.Container{mainContainer},
+					InitContainers: []corev1.Container{prepInitContainer},
+					Containers:     []corev1.Container{mainContainer, helperContainer},
 					Volumes: []corev1.Volume{
 						{
 							Name: rootfsOverlayVolumeName,
@@ -235,6 +281,12 @@ func (c *Client) CreatePersistentSandbox(ctx context.Context, opts CreatePersist
 								PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
 									ClaimName: claimName,
 								},
+							},
+						},
+						{
+							Name: rootfsOverlayControlVolumeName,
+							VolumeSource: corev1.VolumeSource{
+								EmptyDir: &corev1.EmptyDirVolumeSource{},
 							},
 						},
 					},
@@ -558,95 +610,255 @@ func int64Ptr(v int64) *int64 {
 	return &v
 }
 
-func mountPropagationPtr(v corev1.MountPropagationMode) *corev1.MountPropagationMode {
-	return &v
-}
-
-const rootfsOverlayInitScript = `
+func buildRootfsOverlayPrepScript() string {
+	return fmt.Sprintf(`
 set -eu
 
-ROOT=/.liteboxd-rootfs
-STATE="$ROOT/.liteboxd-overlay"
+ROOT=%q
+STATE="$ROOT/%s"
+CONTROL=%q
+
+mkdir -p "$ROOT" "$STATE" "$CONTROL"
+rm -f "$CONTROL"/main.info "$CONTROL"/mounted.* "$CONTROL"/failed.* "$CONTROL"/stop-request.* "$CONTROL"/unmounted.*
+`, rootfsOverlayMountTarget, rootfsOverlayStateDir, rootfsOverlayControlDir)
+}
+
+func buildRootfsOverlayMainWrapperScript() string {
+	return fmt.Sprintf(`
+set -eu
+
+ROOT=${LITEBOXD_ROOTFS_MOUNT_TARGET:-%q}
+CONTROL=${LITEBOXD_ROOTFS_CONTROL_DIR:-%q}
+MERGED="$ROOT/%s"
+IFS=' ' read -r SELF_PID _ < /proc/self/stat
+GEN="$(date +%%s)-$SELF_PID"
+MAIN_INFO="$CONTROL/main.info"
+MOUNTED_FILE="$CONTROL/mounted.$GEN"
+FAILED_FILE="$CONTROL/failed.$GEN"
+STOP_FILE="$CONTROL/stop-request.$GEN"
+UNMOUNTED_FILE="$CONTROL/unmounted.$GEN"
+CHILD_PID=""
+
+log() {
+  echo "[rootfs-main] $*"
+}
+
+request_unmount() {
+  if [ -f "$STOP_FILE" ]; then
+    return 0
+  fi
+  : > "$STOP_FILE"
+  i=0
+  while [ "$i" -lt 50 ]; do
+    if [ -f "$UNMOUNTED_FILE" ]; then
+      return 0
+    fi
+    i=$((i+1))
+    sleep 0.1
+  done
+  log "timed out waiting for helper unmount acknowledgement"
+  return 0
+}
+
+forward_term() {
+  log "received stop signal"
+  if [ -n "$CHILD_PID" ]; then
+    kill -TERM "$CHILD_PID" 2>/dev/null || true
+  fi
+  request_unmount
+}
+
+trap forward_term TERM INT
+
+mkdir -p "$CONTROL"
+rm -f "$MOUNTED_FILE" "$FAILED_FILE" "$STOP_FILE" "$UNMOUNTED_FILE"
+printf '%%s %%s\n' "$GEN" "$SELF_PID" > "$MAIN_INFO.tmp"
+mv "$MAIN_INFO.tmp" "$MAIN_INFO"
+
+i=0
+while :; do
+  if [ -f "$MOUNTED_FILE" ]; then
+    break
+  fi
+  if [ -f "$FAILED_FILE" ]; then
+    log "helper failed to mount rootfs"
+    cat "$FAILED_FILE" >&2 || true
+    exit 1
+  fi
+  i=$((i+1))
+  if [ "$i" -ge 300 ]; then
+    log "helper did not mount rootfs in time"
+    exit 1
+  fi
+  sleep 0.2
+done
+
+log "rootfs ready, launching sandbox command"
+chroot "$MERGED" "$@" &
+CHILD_PID=$!
+set +e
+wait "$CHILD_PID"
+STATUS=$?
+set -e
+CHILD_PID=""
+request_unmount
+exit "$STATUS"
+`, rootfsOverlayMountTarget, rootfsOverlayControlDir, rootfsOverlayMergedSub)
+}
+
+func buildRootfsOverlayHelperScript() string {
+	return fmt.Sprintf(`
+set -eu
+
+ROOT=%q
+STATE="$ROOT/%s"
 UPPER="$STATE/upper"
 WORK="$STATE/work"
 MERGED="$STATE/merged"
+CONTROL=%q
+HELPER_ROOT="/proc/self/root"
+HELPER_PATH="$HELPER_ROOT/usr/local/sbin:$HELPER_ROOT/usr/local/bin:$HELPER_ROOT/usr/sbin:$HELPER_ROOT/usr/bin:$HELPER_ROOT/sbin:$HELPER_ROOT/bin"
+TERM_REQUESTED=0
+CURRENT_GEN=""
+CURRENT_PID=""
 
 log() {
-  echo "[rootfs-init] $*"
+  echo "[rootfs-helper] $*"
 }
+
+require_binary() {
+  name="$1"
+  if ! command -v "$name" >/dev/null 2>&1; then
+    log "required binary not found: $name"
+    exit 1
+  fi
+}
+
+target_sh() {
+  target_pid="$1"
+  shift
+  nsenter -t "$target_pid" -m --root="/proc/$target_pid/root" --wd=/ -- "$HELPER_ROOT/bin/sh" -eu -c "PATH='$HELPER_PATH'; export PATH; $*"
+}
+
+cleanup_generation() {
+  target_pid="$1"
+  gen="$2"
+  if [ -z "$gen" ]; then
+    return 0
+  fi
+  log "unmounting overlay for generation $gen"
+  if kill -0 "$target_pid" 2>/dev/null; then
+    target_sh "$target_pid" '
+for target in $(awk -v base="'"$MERGED"'" '\''$5 == base || index($5, base "/") == 1 { print $5 }'\'' /proc/self/mountinfo | sort -r); do
+  umount -l "$target" 2>/dev/null || true
+done
+'
+  fi
+  : > "$CONTROL/unmounted.$gen"
+  rm -f "$CONTROL/stop-request.$gen"
+}
+
+mount_generation() {
+  target_pid="$1"
+  gen="$2"
+  mounted_file="$CONTROL/mounted.$gen"
+  failed_file="$CONTROL/failed.$gen"
+  rm -f "$mounted_file" "$failed_file" "$CONTROL/unmounted.$gen"
+  log "mounting overlay for generation $gen into pid $target_pid"
+  if target_sh "$target_pid" '
+ROOT="'"$ROOT"'"
+STATE="'"$STATE"'"
+UPPER="'"$UPPER"'"
+WORK="'"$WORK"'"
+MERGED="'"$MERGED"'"
 
 is_mounted() {
   target="$1"
-  awk -v t="$target" '$5 == t { found = 1 } END { exit(found ? 0 : 1) }' /proc/self/mountinfo
+  awk -v t="$target" '\''$5 == t { found = 1 } END { exit(found ? 0 : 1) }'\'' /proc/self/mountinfo
 }
 
-ensure_proc_mount() {
-  target="$1"
-  mkdir -p "$target"
-  if is_mounted "$target"; then
-    return 0
-  fi
-  mount -t proc proc "$target"
-}
-
-ensure_bind_mount() {
-  src="$1"
-  target="$2"
-  mkdir -p "$target"
-  if is_mounted "$target"; then
-    return 0
-  fi
-  mount --rbind "$src" "$target"
-  mount --make-rslave "$target" || true
-}
-
-ensure_bind_file() {
-  src="$1"
-  target="$2"
-  parent="$(dirname "$target")"
-  mkdir -p "$parent"
-  touch "$target"
-  if is_mounted "$target"; then
-    return 0
-  fi
-  mount --bind "$src" "$target"
-}
-
-mkdir -p "$UPPER" "$WORK" "$MERGED"
-
-# If this pod restart path already mounted overlay, keep existing writable state.
-if is_mounted "$MERGED"; then
-  log "overlay already mounted: $MERGED"
-else
-  # Workdir must be empty for overlay mount.
+mkdir -p "$ROOT" "$STATE" "$UPPER" "$WORK" "$MERGED" "$MERGED/proc" "$MERGED/sys" "$MERGED/dev" "$MERGED/run" "$MERGED/etc"
+if ! is_mounted "$MERGED"; then
   rm -rf "${WORK:?}/"* || true
-
-  # lowerdir keeps image filesystem readonly, upper/work are persisted on PVC.
-  log "mounting overlay lowerdir=/ upperdir=$UPPER workdir=$WORK merged=$MERGED"
-  if ! mount -t overlay overlay \
-    -o "lowerdir=/,upperdir=$UPPER,workdir=$WORK" \
-    "$MERGED"; then
-    log "overlay mount failed"
-    echo "[rootfs-init] --- /proc/self/mountinfo (tail) ---"
-    tail -n 100 /proc/self/mountinfo || true
-    echo "[rootfs-init] --- /proc/filesystems ---"
-    cat /proc/filesystems || true
-    exit 1
-  fi
+  mount -t overlay overlay -o "lowerdir=/,upperdir=$UPPER,workdir=$WORK" "$MERGED"
 fi
-
-# Mount pseudo filesystems into merged root so chroot runtime behaves like normal container rootfs.
-ensure_proc_mount "$MERGED/proc"
-ensure_bind_mount /sys "$MERGED/sys"
-ensure_bind_mount /dev "$MERGED/dev"
-ensure_bind_mount /run "$MERGED/run"
-# Preserve Pod-injected network identity files for the chroot runtime.
-ensure_bind_file /etc/resolv.conf "$MERGED/etc/resolv.conf"
-ensure_bind_file /etc/hosts "$MERGED/etc/hosts"
-ensure_bind_file /etc/hostname "$MERGED/etc/hostname"
-
-# Basic sanity check to fail fast when mount is not effective.
-test -d "$MERGED/etc"
+if ! is_mounted "$MERGED/proc"; then
+  mount -t proc proc "$MERGED/proc"
+fi
+for dir in sys dev run; do
+  target="$MERGED/$dir"
+  if ! is_mounted "$target"; then
+    mount --rbind "/$dir" "$target"
+    mount --make-rslave "$target" || true
+  fi
+done
+for file in resolv.conf hosts hostname; do
+  target="$MERGED/etc/$file"
+  touch "$target"
+  if ! is_mounted "$target"; then
+    mount --bind "/etc/$file" "$target"
+  fi
+done
 test -d "$MERGED/proc"
-log "overlay mount ready"
-`
+test -f "$MERGED/etc/hosts"
+'; then
+    : > "$mounted_file"
+    return 0
+  fi
+
+  {
+    echo "mount failed for generation $gen"
+    echo "--- target mountinfo tail ---"
+    if kill -0 "$target_pid" 2>/dev/null; then
+      target_sh "$target_pid" "tail -n 100 /proc/self/mountinfo || true"
+    fi
+  } > "$failed_file" 2>&1 || true
+  return 1
+}
+
+trap 'TERM_REQUESTED=1' TERM INT
+
+require_binary nsenter
+require_binary mount
+require_binary umount
+require_binary sort
+require_binary awk
+
+mkdir -p "$CONTROL"
+
+while :; do
+  if [ -f "$CONTROL/main.info" ]; then
+    read -r observed_gen observed_pid < "$CONTROL/main.info" || true
+    if [ -n "${observed_gen:-}" ] && [ -n "${observed_pid:-}" ] && [ "$observed_gen" != "$CURRENT_GEN" ]; then
+      CURRENT_GEN="$observed_gen"
+      CURRENT_PID="$observed_pid"
+      if ! mount_generation "$CURRENT_PID" "$CURRENT_GEN"; then
+        CURRENT_GEN=""
+        CURRENT_PID=""
+      fi
+    fi
+  fi
+
+  if [ -n "$CURRENT_GEN" ] && [ -f "$CONTROL/stop-request.$CURRENT_GEN" ]; then
+    cleanup_generation "$CURRENT_PID" "$CURRENT_GEN"
+    CURRENT_GEN=""
+    CURRENT_PID=""
+  fi
+
+  if [ -n "$CURRENT_GEN" ] && ! kill -0 "$CURRENT_PID" 2>/dev/null; then
+    : > "$CONTROL/unmounted.$CURRENT_GEN"
+    CURRENT_GEN=""
+    CURRENT_PID=""
+  fi
+
+  if [ "$TERM_REQUESTED" -eq 1 ]; then
+    if [ -n "$CURRENT_GEN" ]; then
+      cleanup_generation "$CURRENT_PID" "$CURRENT_GEN"
+    fi
+    exit 0
+  fi
+
+  sleep 0.2
+done
+`, rootfsOverlayMountTarget, rootfsOverlayStateDir, rootfsOverlayControlDir)
+}

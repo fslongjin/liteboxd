@@ -109,11 +109,13 @@ kubectl -n liteboxd-sandbox get pvc | grep sandbox-data-<sandbox-id>
 
 ## 7. 卡在 Init 阶段的排查
 
-如果 Pod 长时间停在 `Init:0/1`，优先检查 `rootfs-init`：
+如果 Pod 长时间停在 `Init:0/1`，优先检查 `rootfs-prepare`：
 
 ```bash
-kubectl -n liteboxd-sandbox logs <pod-name> -c rootfs-init --previous
-kubectl -n liteboxd-sandbox logs <pod-name> -c rootfs-init
+kubectl -n liteboxd-sandbox logs <pod-name> -c rootfs-prepare --previous
+kubectl -n liteboxd-sandbox logs <pod-name> -c rootfs-prepare
+kubectl -n liteboxd-sandbox logs <pod-name> -c rootfs-helper --previous
+kubectl -n liteboxd-sandbox logs <pod-name> -c rootfs-helper
 kubectl -n liteboxd-sandbox describe pod <pod-name>
 ```
 
@@ -122,10 +124,12 @@ kubectl -n liteboxd-sandbox describe pod <pod-name>
 1. `overlay mount failed`
 2. `No space left on device`
 3. `pod has unbound immediate PersistentVolumeClaims`
+4. `helper failed to mount rootfs`
 
 说明：
 
-- 当前持久化实现是“PVC 作为 overlay 可写层（upper/work）”，不会再整份拷贝 rootfs 到 PVC。  
+- 当前持久化实现是“`rootfs-helper` 进入主容器 mount namespace 后，在 PVC 上组装 overlay upper/work 并回写 ready/unmounted 标记”，不会再把子挂载传播到宿主机 kubelet volume path。  
+- PVC 仍然只承载 overlay 可写层（upper/work），不会再整份拷贝 rootfs 到 PVC。  
 - 若出现 `No space left on device`，通常是业务写入超过 PVC 配额，而不是初始化拷贝导致。
 
 ## 8. 删除卡住与 server 重启恢复验证
