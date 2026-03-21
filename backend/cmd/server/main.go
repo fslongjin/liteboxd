@@ -99,11 +99,13 @@ func main() {
 	if controlNamespace == "" {
 		controlNamespace = k8s.DefaultControlNamespace
 	}
+	persistentRootFSHelperImage := os.Getenv("PERSISTENT_ROOTFS_HELPER_IMAGE")
 
 	k8sClient, err := k8s.NewClient(k8s.ClientConfig{
-		KubeconfigPath:   kubeconfigPath,
-		SandboxNamespace: sandboxNamespace,
-		ControlNamespace: controlNamespace,
+		KubeconfigPath:              kubeconfigPath,
+		SandboxNamespace:            sandboxNamespace,
+		ControlNamespace:            controlNamespace,
+		PersistentRootFSHelperImage: persistentRootFSHelperImage,
 	})
 	if err != nil {
 		log.Fatalf("Failed to create k8s client: %v", err)

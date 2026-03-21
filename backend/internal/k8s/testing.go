@@ -15,8 +15,9 @@ func NewClientForTestWithSetup(setup func(*kubefake.Clientset), objects ...runti
 		setup(clientset)
 	}
 	return &Client{
-		clientset: clientset,
-		sandboxNS: DefaultSandboxNamespace,
-		controlNS: DefaultControlNamespace,
+		clientset:                   clientset,
+		sandboxNS:                   DefaultSandboxNamespace,
+		controlNS:                   DefaultControlNamespace,
+		persistentRootFSHelperImage: DefaultPersistentRootFSHelperImage,
 	}
 }

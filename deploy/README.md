@@ -268,6 +268,7 @@ bash deploy/scripts/port-forward-k8s.sh
 | `SHUTDOWN_TIMEOUT` | 120s（部署清单中） | 优雅停机与会话排空超时时间 |
 | `GATEWAY_URL` | http://liteboxd-gateway.liteboxd-system.svc.cluster.local:8081 | API 返回给客户端的网关访问地址 |
 | `DATA_DIR` | ./data | 数据目录 |
+| `PERSISTENT_ROOTFS_HELPER_IMAGE` | `ubuntu:24.04` | 持久化 rootfs helper/init 使用的镜像，可在部署 YAML 中覆盖 |
 
 ## Phase2 热升级行为
 
