@@ -452,6 +452,18 @@ func (s *SandboxStore) SetStarted(ctx context.Context, id string, newExpiresAt, 
 	return nil
 }
 
+func (s *SandboxStore) EnsureStoppedAt(ctx context.Context, id string, now time.Time) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE sandboxes
+		SET stopped_at = COALESCE(stopped_at, ?), updated_at = ?
+		WHERE id = ?
+	`, now, now, id)
+	if err != nil {
+		return fmt.Errorf("failed to ensure stopped_at: %w", err)
+	}
+	return nil
+}
+
 func (s *SandboxStore) UpdateObservedState(ctx context.Context, id, podUID, podPhase, podIP, lifecycleStatus, reason string, lastSeen, now time.Time) error {
 	_, err := s.db.ExecContext(ctx, `
 		UPDATE sandboxes

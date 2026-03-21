@@ -300,6 +300,10 @@ func (c *Client) DeletePod(ctx context.Context, sandboxID string) error {
 	return c.clientset.CoreV1().Pods(c.sandboxNS).Delete(ctx, podName, metav1.DeleteOptions{})
 }
 
+func (c *Client) DeletePodByName(ctx context.Context, name string) error {
+	return c.clientset.CoreV1().Pods(c.sandboxNS).Delete(ctx, name, metav1.DeleteOptions{})
+}
+
 func (c *Client) ListSandboxPods(ctx context.Context, sandboxID string) ([]corev1.Pod, error) {
 	selector := labels.Set{
 		"app":          LabelApp,
