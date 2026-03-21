@@ -391,10 +391,29 @@ func (s *SandboxReconcileService) reconcileStoppedPersistentSandbox(ctx context.
 	if statusReason == "" {
 		statusReason = "stopped by request"
 	}
+	if rec.StoppedAt == nil {
+		result.drifted = true
+		if err := s.sandboxStore.EnsureStoppedAt(ctx, rec.ID, now); err != nil {
+			return result, err
+		}
+		result.fixed = true
+		rec.StoppedAt = &now
+		_ = s.sandboxStore.AddReconcileItem(ctx, &store.ReconcileItemRecord{
+			RunID:     runID,
+			SandboxID: rec.ID,
+			DriftType: "status_mismatch",
+			Action:    "backfill_stopped_at",
+			Detail:    "persistent sandbox backfilled missing stopped_at because deployment replicas is 0",
+			CreatedAt: now,
+		})
+	}
 
-	if snapshot.Pod != nil && isTerminalOrDeletingPod(snapshot.Pod) {
+	if snapshot.Pod != nil {
 		result.drifted = true
 		action := "cleanup_residual_pod"
+		if !isTerminalOrDeletingPod(snapshot.Pod) {
+			action = "cleanup_unexpected_pod"
+		}
 		if err := s.k8sClient.DeletePodByName(ctx, snapshot.Pod.Name); err != nil && !apierrors.IsNotFound(err) {
 			action = "cleanup_failed"
 			_ = s.sandboxStore.AddReconcileItem(ctx, &store.ReconcileItemRecord{
@@ -413,7 +432,7 @@ func (s *SandboxReconcileService) reconcileStoppedPersistentSandbox(ctx context.
 			SandboxID: rec.ID,
 			DriftType: "status_mismatch",
 			Action:    action,
-			Detail:    fmt.Sprintf("stopped sandbox cleaned residual pod %s in phase %s", snapshot.Pod.Name, snapshot.Pod.Status.Phase),
+			Detail:    fmt.Sprintf("stopped sandbox cleaned residual pod %s in phase %s while deployment replicas is 0", snapshot.Pod.Name, snapshot.Pod.Status.Phase),
 			CreatedAt: now,
 		})
 	}
@@ -432,9 +451,6 @@ func (s *SandboxReconcileService) reconcileStoppedPersistentSandbox(ctx context.
 			now,
 			now,
 		); err == nil && updated {
-			if rec.StoppedAt == nil {
-				_ = s.sandboxStore.EnsureStoppedAt(ctx, rec.ID, now)
-			}
 			result.fixed = true
 			if rec.LifecycleStatus != string(model.SandboxStatusStopped) {
 				_ = s.sandboxStore.AppendStatusHistory(ctx, rec.ID, "reconcile", rec.LifecycleStatus, string(model.SandboxStatusStopped), "reconcile: deployment scaled to zero", nil, now)

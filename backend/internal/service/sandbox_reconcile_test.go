@@ -293,6 +293,107 @@ func TestReconcilePersistentStoppedRemainsStartableAfterResidualCompletedPod(t *
 	}
 }
 
+func TestReconcilePersistentStoppedCleansUnexpectedRunningPod(t *testing.T) {
+	initServiceTestDB(t)
+	ctx := context.Background()
+	sandboxStore := store.NewSandboxStore()
+	now := time.Now().UTC().Add(-5 * time.Minute)
+
+	rec := persistentRecord("recon-stop-running", "stopped", "stopped by request")
+	rec.StoppedAt = &now
+	if err := sandboxStore.Create(ctx, rec); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	client := k8s.NewClientForTest(persistentObjectsWithReplicas("recon-stop-running", 0, corev1.PodRunning, false)...)
+	svc := NewSandboxReconcileService(client, sandboxStore)
+	if _, err := svc.Run(ctx, "manual"); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	got, err := sandboxStore.GetByID(ctx, rec.ID)
+	if err != nil {
+		t.Fatalf("GetByID() error = %v", err)
+	}
+	if got.LifecycleStatus != "stopped" {
+		t.Fatalf("LifecycleStatus = %q, want stopped", got.LifecycleStatus)
+	}
+	if got.PodPhase != "" || got.PodUID != "" || got.PodIP != "" {
+		t.Fatalf("pod metadata should be cleared for stopped sandbox, got phase=%q uid=%q ip=%q", got.PodPhase, got.PodUID, got.PodIP)
+	}
+	if _, err := client.GetPod(ctx, rec.ID); !apierrors.IsNotFound(err) {
+		t.Fatalf("expected unexpected running pod to be deleted, got err=%v", err)
+	}
+
+	run, err := svc.ListRuns(ctx, 1)
+	if err != nil {
+		t.Fatalf("ListRuns() error = %v", err)
+	}
+	detail, err := svc.GetRun(ctx, run.Items[0].ID)
+	if err != nil {
+		t.Fatalf("GetRun() error = %v", err)
+	}
+	foundCleanup := false
+	for _, item := range detail.Items {
+		if item.SandboxID == rec.ID && item.Action == "cleanup_unexpected_pod" {
+			foundCleanup = true
+		}
+	}
+	if !foundCleanup {
+		t.Fatalf("expected cleanup_unexpected_pod reconcile item")
+	}
+}
+
+func TestReconcilePersistentStoppedBackfillsStoppedAtWithoutOtherMismatch(t *testing.T) {
+	initServiceTestDB(t)
+	ctx := context.Background()
+	sandboxStore := store.NewSandboxStore()
+
+	rec := persistentRecord("recon-stop-backfill", "stopped", "stopped by request")
+	rec.StoppedAt = nil
+	rec.PodUID = ""
+	rec.PodPhase = ""
+	rec.PodIP = ""
+	if err := sandboxStore.Create(ctx, rec); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	client := k8s.NewClientForTest(persistentObjectsWithReplicas("recon-stop-backfill", 0, "", false)...)
+	svc := NewSandboxReconcileService(client, sandboxStore)
+	if _, err := svc.Run(ctx, "manual"); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	got, err := sandboxStore.GetByID(ctx, rec.ID)
+	if err != nil {
+		t.Fatalf("GetByID() error = %v", err)
+	}
+	if got.LifecycleStatus != "stopped" {
+		t.Fatalf("LifecycleStatus = %q, want stopped", got.LifecycleStatus)
+	}
+	if got.StoppedAt == nil {
+		t.Fatalf("StoppedAt is nil, want backfilled")
+	}
+
+	run, err := svc.ListRuns(ctx, 1)
+	if err != nil {
+		t.Fatalf("ListRuns() error = %v", err)
+	}
+	detail, err := svc.GetRun(ctx, run.Items[0].ID)
+	if err != nil {
+		t.Fatalf("GetRun() error = %v", err)
+	}
+	foundBackfill := false
+	for _, item := range detail.Items {
+		if item.SandboxID == rec.ID && item.Action == "backfill_stopped_at" {
+			foundBackfill = true
+		}
+	}
+	if !foundBackfill {
+		t.Fatalf("expected backfill_stopped_at reconcile item")
+	}
+}
+
 func TestReconcilePersistentSucceededPodWithReplicasOneDoesNotPretendStopped(t *testing.T) {
 	initServiceTestDB(t)
 	ctx := context.Background()
