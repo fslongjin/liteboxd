@@ -517,6 +517,10 @@ func (s *SandboxService) Delete(ctx context.Context, id string) (*model.Sandbox,
 		sandbox := s.recordToSandboxMetadata(record)
 		return &sandbox, nil
 	}
+	if record.DesiredState == store.DesiredStateDeleted || record.LifecycleStatus == "terminating" {
+		sandbox := s.recordToSandboxMetadata(record)
+		return &sandbox, nil
+	}
 
 	now := time.Now().UTC()
 	if err := s.sandboxStore.MarkDeletionRequested(ctx, id, now); err != nil {

@@ -79,6 +79,16 @@ func (s *SandboxDeletionService) processSandbox(ctx context.Context, rec *store.
 	if phase == "" {
 		phase = store.DeletionPhaseRequested
 	}
+	logger := logWithSandboxID(ctx, rec.ID).With(
+		"deletion_phase", phase,
+		"deletion_force_level", rec.DeletionForceLevel,
+		"deletion_attempts", rec.DeletionAttempts,
+		"has_deployment", snapshot.Deployment != nil,
+		"pod_count", len(snapshot.Pods),
+		"has_pvc", snapshot.PVC != nil,
+		"has_pv", snapshot.PV != nil,
+		"volume_attachment_count", len(snapshot.VolumeAttachments),
+	)
 	switch phase {
 	case store.DeletionPhaseRequested:
 		return s.transitionPhase(ctx, rec, store.DeletionPhaseQuiescingRuntime)
@@ -93,6 +103,7 @@ func (s *SandboxDeletionService) processSandbox(ctx context.Context, rec *store.
 	case store.DeletionPhaseCompleted:
 		return nil
 	default:
+		logger.Warn("unknown deletion phase, resetting to requested")
 		return s.transitionPhase(ctx, rec, store.DeletionPhaseRequested)
 	}
 }
@@ -211,6 +222,7 @@ func (s *SandboxDeletionService) handleVerifying(ctx context.Context, rec *store
 		return err
 	}
 	_ = s.sandboxStore.AppendStatusHistory(ctx, rec.ID, "system", "terminating", "deleted", "delete completed", nil, now)
+	logWithSandboxID(ctx, rec.ID).Info("sandbox deletion completed", "deletion_force_level", rec.DeletionForceLevel, "deletion_attempts", rec.DeletionAttempts)
 	return nil
 }
 
@@ -259,10 +271,15 @@ func (s *SandboxDeletionService) snapshot(ctx context.Context, rec *store.Sandbo
 
 func (s *SandboxDeletionService) transitionPhase(ctx context.Context, rec *store.SandboxRecord, phase string) error {
 	now := time.Now().UTC()
+	prev := rec.DeletionPhase
+	if prev == "" {
+		prev = store.DeletionPhaseRequested
+	}
 	if err := s.sandboxStore.AdvanceDeletionPhase(ctx, rec.ID, phase, now); err != nil {
 		return err
 	}
 	rec.DeletionPhase = phase
+	logWithSandboxID(ctx, rec.ID).Info("sandbox deletion phase advanced", "from_phase", prev, "to_phase", phase, "deletion_force_level", rec.DeletionForceLevel, "deletion_attempts", rec.DeletionAttempts)
 	return s.markReadyForImmediateRetry(ctx, rec)
 }
 
