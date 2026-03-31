@@ -135,7 +135,7 @@ func TestSandboxDeletionServiceCompletesPersistentDelete(t *testing.T) {
 			Namespace: k8s.DefaultSandboxNamespace,
 		},
 	}
-	client := k8s.NewClientForTest(pvc)
+    client := k8s.NewClientForTest(pvc)
 	deletionSvc := NewSandboxDeletionService(client, sandboxStore)
 	for i := 0; i < 6; i++ {
 		if err := deletionSvc.RunPending(ctx); err != nil {
