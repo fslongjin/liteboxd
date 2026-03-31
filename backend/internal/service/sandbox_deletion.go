@@ -79,6 +79,16 @@ func (s *SandboxDeletionService) processSandbox(ctx context.Context, rec *store.
 	if phase == "" {
 		phase = store.DeletionPhaseRequested
 	}
+	logger := logWithSandboxID(ctx, rec.ID).With(
+		"deletion_phase", phase,
+		"deletion_force_level", rec.DeletionForceLevel,
+		"deletion_attempts", rec.DeletionAttempts,
+		"has_deployment", snapshot.Deployment != nil,
+		"pod_count", len(snapshot.Pods),
+		"has_pvc", snapshot.PVC != nil,
+		"has_pv", snapshot.PV != nil,
+		"volume_attachment_count", len(snapshot.VolumeAttachments),
+	)
 	switch phase {
 	case store.DeletionPhaseRequested:
 		return s.transitionPhase(ctx, rec, store.DeletionPhaseQuiescingRuntime)
@@ -93,18 +103,12 @@ func (s *SandboxDeletionService) processSandbox(ctx context.Context, rec *store.
 	case store.DeletionPhaseCompleted:
 		return nil
 	default:
+		logger.Warn("unknown deletion phase, resetting to requested")
 		return s.transitionPhase(ctx, rec, store.DeletionPhaseRequested)
 	}
 }
 
 func (s *SandboxDeletionService) handleQuiescingRuntime(ctx context.Context, rec *store.SandboxRecord, snapshot *k8s.SandboxDeletionSnapshot, now time.Time) error {
-	if s.k8sClient.GetDynamicClient() != nil {
-		netPolicyMgr := k8s.NewNetworkPolicyManager(s.k8sClient)
-		if err := netPolicyMgr.DeleteDomainAllowlistPolicy(ctx, rec.ID); err != nil {
-			logWithSandboxID(ctx, rec.ID).Warn("failed to delete domain allowlist policy during deletion", "error", err)
-		}
-	}
-
 	if rec.PersistenceEnabled {
 		if snapshot.Deployment != nil {
 			if err := s.k8sClient.DeletePersistentSandbox(ctx, rec.ID, "", "Retain"); err != nil {
@@ -164,29 +168,29 @@ func (s *SandboxDeletionService) handleForceCleanup(ctx context.Context, rec *st
 				}
 			}
 		}
-		if snapshot.Deployment != nil && snapshot.Deployment.DeletionTimestamp != nil {
-			if err := s.k8sClient.PatchDeploymentFinalizers(ctx, snapshot.Deployment.Name, nil); err != nil {
-				return err
-			}
-		}
+        if snapshot.Deployment != nil && snapshot.Deployment.DeletionTimestamp != nil {
+            if err := s.k8sClient.PatchDeploymentFinalizers(ctx, snapshot.Deployment.Name, rec.ID, nil); err != nil {
+                return err
+            }
+        }
 		return s.bumpForceLevel(ctx, rec, 1, now)
 	case 1:
-		if snapshot.PVC != nil && s.canForceDeletePVC(rec, snapshot) && exceededDeletionTimeout(rec.DeletionStartedAt, pvcForceCleanupThreshold, now) {
-			if err := s.k8sClient.PatchPVCFinalizers(ctx, snapshot.PVC.Name, nil); err != nil {
-				return err
-			}
-			if err := s.k8sClient.DeletePersistentSandbox(ctx, rec.ID, rec.VolumeClaimName, rec.VolumeReclaimPolicy); err != nil {
-				return err
-			}
-		}
+        if snapshot.PVC != nil && s.canForceDeletePVC(rec, snapshot) && exceededDeletionTimeout(rec.DeletionStartedAt, pvcForceCleanupThreshold, now) {
+            if err := s.k8sClient.PatchPVCFinalizers(ctx, snapshot.PVC.Name, rec.ID, nil); err != nil {
+                return err
+            }
+            if err := s.k8sClient.DeletePersistentSandbox(ctx, rec.ID, rec.VolumeClaimName, rec.VolumeReclaimPolicy); err != nil {
+                return err
+            }
+        }
 		return s.bumpForceLevel(ctx, rec, 2, now)
 	case 2:
-		if snapshot.PV != nil && exceededDeletionTimeout(rec.DeletionStartedAt, storageAttachmentCleanupAfter, now) {
-			if err := s.cleanupStorageAttachments(ctx, snapshot); err != nil {
-				return err
-			}
-		}
-		return s.bumpForceLevel(ctx, rec, 3, now)
+        if snapshot.PV != nil && exceededDeletionTimeout(rec.DeletionStartedAt, storageAttachmentCleanupAfter, now) {
+            if err := s.cleanupStorageAttachments(ctx, rec, snapshot); err != nil {
+                return err
+            }
+        }
+        return s.bumpForceLevel(ctx, rec, 3, now)
 	default:
 		return s.transitionPhase(ctx, rec, store.DeletionPhaseVerifying)
 	}
@@ -211,24 +215,25 @@ func (s *SandboxDeletionService) handleVerifying(ctx context.Context, rec *store
 		return err
 	}
 	_ = s.sandboxStore.AppendStatusHistory(ctx, rec.ID, "system", "terminating", "deleted", "delete completed", nil, now)
+	logWithSandboxID(ctx, rec.ID).Info("sandbox deletion completed", "deletion_force_level", rec.DeletionForceLevel, "deletion_attempts", rec.DeletionAttempts)
 	return nil
 }
 
-func (s *SandboxDeletionService) cleanupStorageAttachments(ctx context.Context, snapshot *k8s.SandboxDeletionSnapshot) error {
-	for i := range snapshot.VolumeAttachments {
-		if err := s.k8sClient.DeleteVolumeAttachment(ctx, snapshot.VolumeAttachments[i].Name); err != nil {
-			return err
-		}
-	}
-	if snapshot.PV != nil {
-		if err := s.k8sClient.PatchPVFinalizers(ctx, snapshot.PV.Name, nil); err != nil {
-			return err
-		}
-		if err := s.k8sClient.DeletePersistentVolume(ctx, snapshot.PV.Name); err != nil {
-			return err
-		}
-	}
-	return nil
+func (s *SandboxDeletionService) cleanupStorageAttachments(ctx context.Context, rec *store.SandboxRecord, snapshot *k8s.SandboxDeletionSnapshot) error {
+    for i := range snapshot.VolumeAttachments {
+        if err := s.k8sClient.DeleteVolumeAttachment(ctx, snapshot.VolumeAttachments[i].Name); err != nil {
+            return err
+        }
+    }
+    if snapshot.PV != nil {
+        if err := s.k8sClient.PatchPVFinalizers(ctx, snapshot.PV.Name, rec.VolumeClaimName, nil); err != nil {
+            return err
+        }
+        if err := s.k8sClient.DeletePersistentVolume(ctx, snapshot.PV.Name, rec.VolumeClaimName); err != nil {
+            return err
+        }
+    }
+    return nil
 }
 
 func (s *SandboxDeletionService) canForceDeletePVC(rec *store.SandboxRecord, snapshot *k8s.SandboxDeletionSnapshot) bool {
@@ -259,10 +264,15 @@ func (s *SandboxDeletionService) snapshot(ctx context.Context, rec *store.Sandbo
 
 func (s *SandboxDeletionService) transitionPhase(ctx context.Context, rec *store.SandboxRecord, phase string) error {
 	now := time.Now().UTC()
+	prev := rec.DeletionPhase
+	if prev == "" {
+		prev = store.DeletionPhaseRequested
+	}
 	if err := s.sandboxStore.AdvanceDeletionPhase(ctx, rec.ID, phase, now); err != nil {
 		return err
 	}
 	rec.DeletionPhase = phase
+	logWithSandboxID(ctx, rec.ID).Info("sandbox deletion phase advanced", "from_phase", prev, "to_phase", phase, "deletion_force_level", rec.DeletionForceLevel, "deletion_attempts", rec.DeletionAttempts)
 	return s.markReadyForImmediateRetry(ctx, rec)
 }
 

@@ -4,6 +4,7 @@ namespace: liteboxd-sandbox
 resources:
   - namespace.yaml
   - rbac-api.yaml
+  - rbac-network-controller.yaml
   - rbac-gateway.yaml
   - networkpolicy-default-deny-all.yaml
   - networkpolicy-allow-dns.yaml

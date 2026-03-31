@@ -11,6 +11,7 @@ resources:
   - pvc.yaml
   - api-service.yaml
   - api-deployment.yaml
+  - network-controller-deployment.yaml
   - api-pdb.yaml
   - gateway-service.yaml
   - gateway-deployment.yaml

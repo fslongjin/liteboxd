@@ -403,34 +403,45 @@ func (c *Client) DeletePersistentSandbox(ctx context.Context, sandboxID, claimNa
 	return nil
 }
 
-func (c *Client) PatchDeploymentFinalizers(ctx context.Context, name string, finalizers []string) error {
-	deploy, err := c.clientset.AppsV1().Deployments(c.sandboxNS).Get(ctx, name, metav1.GetOptions{})
-	if err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil
-		}
-		return fmt.Errorf("failed to get deployment %s: %w", name, err)
-	}
-	deploy.Finalizers = append([]string(nil), finalizers...)
-	if _, err := c.clientset.AppsV1().Deployments(c.sandboxNS).Update(ctx, deploy, metav1.UpdateOptions{}); err != nil && !apierrors.IsNotFound(err) {
-		return fmt.Errorf("failed to update deployment %s finalizers: %w", name, err)
-	}
-	return nil
+// PatchDeploymentFinalizers removes or sets deployment finalizers with provenance checks.
+// It validates the Deployment belongs to the expected sandbox via labels before mutating.
+func (c *Client) PatchDeploymentFinalizers(ctx context.Context, name string, expectedSandboxID string, finalizers []string) error {
+    deploy, err := c.clientset.AppsV1().Deployments(c.sandboxNS).Get(ctx, name, metav1.GetOptions{})
+    if err != nil {
+        if apierrors.IsNotFound(err) {
+            return nil
+        }
+        return fmt.Errorf("failed to get deployment %s: %w", name, err)
+    }
+    // provenance check: ensure owned by liteboxd and sandbox-id matches
+    if err := c.validateDeploymentProvenance(deploy, expectedSandboxID); err != nil {
+        return err
+    }
+    deploy.Finalizers = append([]string(nil), finalizers...)
+    if _, err := c.clientset.AppsV1().Deployments(c.sandboxNS).Update(ctx, deploy, metav1.UpdateOptions{}); err != nil && !apierrors.IsNotFound(err) {
+        return fmt.Errorf("failed to update deployment %s finalizers: %w", name, err)
+    }
+    return nil
 }
 
-func (c *Client) PatchPVCFinalizers(ctx context.Context, name string, finalizers []string) error {
-	pvc, err := c.clientset.CoreV1().PersistentVolumeClaims(c.sandboxNS).Get(ctx, name, metav1.GetOptions{})
-	if err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil
-		}
-		return fmt.Errorf("failed to get pvc %s: %w", name, err)
-	}
-	pvc.Finalizers = append([]string(nil), finalizers...)
-	if _, err := c.clientset.CoreV1().PersistentVolumeClaims(c.sandboxNS).Update(ctx, pvc, metav1.UpdateOptions{}); err != nil && !apierrors.IsNotFound(err) {
-		return fmt.Errorf("failed to update pvc %s finalizers: %w", name, err)
-	}
-	return nil
+// PatchPVCFinalizers removes or sets PVC finalizers with provenance checks.
+// It validates PVC labels/ownership and sandbox-id before mutating.
+func (c *Client) PatchPVCFinalizers(ctx context.Context, name string, expectedSandboxID string, finalizers []string) error {
+    pvc, err := c.clientset.CoreV1().PersistentVolumeClaims(c.sandboxNS).Get(ctx, name, metav1.GetOptions{})
+    if err != nil {
+        if apierrors.IsNotFound(err) {
+            return nil
+        }
+        return fmt.Errorf("failed to get pvc %s: %w", name, err)
+    }
+    if err := c.validatePVCProvenance(pvc, expectedSandboxID); err != nil {
+        return err
+    }
+    pvc.Finalizers = append([]string(nil), finalizers...)
+    if _, err := c.clientset.CoreV1().PersistentVolumeClaims(c.sandboxNS).Update(ctx, pvc, metav1.UpdateOptions{}); err != nil && !apierrors.IsNotFound(err) {
+        return fmt.Errorf("failed to update pvc %s finalizers: %w", name, err)
+    }
+    return nil
 }
 
 func (c *Client) GetPersistentVolume(ctx context.Context, name string) (*corev1.PersistentVolume, error) {
@@ -441,27 +452,41 @@ func (c *Client) GetPersistentVolume(ctx context.Context, name string) (*corev1.
 	return pv, nil
 }
 
-func (c *Client) DeletePersistentVolume(ctx context.Context, name string) error {
-	err := c.clientset.CoreV1().PersistentVolumes().Delete(ctx, name, metav1.DeleteOptions{})
-	if err != nil && !apierrors.IsNotFound(err) {
-		return fmt.Errorf("failed to delete pv %s: %w", name, err)
-	}
-	return nil
+// DeletePersistentVolume deletes a PV after validating it belongs to expected PVC in our namespace.
+func (c *Client) DeletePersistentVolume(ctx context.Context, name string, expectedPVCName string) error {
+    pv, err := c.clientset.CoreV1().PersistentVolumes().Get(ctx, name, metav1.GetOptions{})
+    if err != nil {
+        if apierrors.IsNotFound(err) {
+            return nil
+        }
+        return fmt.Errorf("failed to get pv %s: %w", name, err)
+    }
+    if err := c.validatePVProvenance(pv, expectedPVCName); err != nil {
+        return err
+    }
+    if err := c.clientset.CoreV1().PersistentVolumes().Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+        return fmt.Errorf("failed to delete pv %s: %w", name, err)
+    }
+    return nil
 }
 
-func (c *Client) PatchPVFinalizers(ctx context.Context, name string, finalizers []string) error {
-	pv, err := c.clientset.CoreV1().PersistentVolumes().Get(ctx, name, metav1.GetOptions{})
-	if err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil
-		}
-		return fmt.Errorf("failed to get pv %s: %w", name, err)
-	}
-	pv.Finalizers = append([]string(nil), finalizers...)
-	if _, err := c.clientset.CoreV1().PersistentVolumes().Update(ctx, pv, metav1.UpdateOptions{}); err != nil && !apierrors.IsNotFound(err) {
-		return fmt.Errorf("failed to update pv %s finalizers: %w", name, err)
-	}
-	return nil
+// PatchPVFinalizers removes or sets PV finalizers with provenance checks against expected PVC.
+func (c *Client) PatchPVFinalizers(ctx context.Context, name string, expectedPVCName string, finalizers []string) error {
+    pv, err := c.clientset.CoreV1().PersistentVolumes().Get(ctx, name, metav1.GetOptions{})
+    if err != nil {
+        if apierrors.IsNotFound(err) {
+            return nil
+        }
+        return fmt.Errorf("failed to get pv %s: %w", name, err)
+    }
+    if err := c.validatePVProvenance(pv, expectedPVCName); err != nil {
+        return err
+    }
+    pv.Finalizers = append([]string(nil), finalizers...)
+    if _, err := c.clientset.CoreV1().PersistentVolumes().Update(ctx, pv, metav1.UpdateOptions{}); err != nil && !apierrors.IsNotFound(err) {
+        return fmt.Errorf("failed to update pv %s finalizers: %w", name, err)
+    }
+    return nil
 }
 
 func (c *Client) ListVolumeAttachmentsByPV(ctx context.Context, pvName string) ([]storagev1.VolumeAttachment, error) {
@@ -528,6 +553,75 @@ func (c *Client) GetSandboxDeletionSnapshot(ctx context.Context, sandboxID, depl
 		return nil, fmt.Errorf("failed to get pvc %s: %w", pvcName, err)
 	}
 	return snapshot, nil
+}
+
+// validatePVCProvenance ensures the PVC belongs to the expected sandbox and namespace.
+func (c *Client) validatePVCProvenance(pvc *corev1.PersistentVolumeClaim, expectedSandboxID string) error {
+    if pvc == nil {
+        return fmt.Errorf("pvc is nil")
+    }
+    if pvc.Namespace != c.sandboxNS {
+        return fmt.Errorf("pvc %s/%s not in sandbox namespace %s", pvc.Namespace, pvc.Name, c.sandboxNS)
+    }
+    if pvc.Labels == nil {
+        return fmt.Errorf("pvc %s missing labels for provenance check", pvc.Name)
+    }
+    if v, ok := pvc.Labels[LabelManagedBy]; !ok || v != ManagedByServer {
+        return fmt.Errorf("pvc %s not managed by liteboxd-server", pvc.Name)
+    }
+    if v, ok := pvc.Labels[LabelSandboxID]; !ok || v != expectedSandboxID {
+        return fmt.Errorf("pvc %s sandbox-id mismatch", pvc.Name)
+    }
+    if v, ok := pvc.Labels["app"]; !ok || v != LabelApp {
+        return fmt.Errorf("pvc %s app label mismatch", pvc.Name)
+    }
+    return nil
+}
+
+// validatePVProvenance ensures the PV is bound to the expected PVC in our sandbox namespace.
+func (c *Client) validatePVProvenance(pv *corev1.PersistentVolume, expectedPVCName string) error {
+    if pv == nil {
+        return fmt.Errorf("pv is nil")
+    }
+    if pv.Spec.ClaimRef == nil {
+        return fmt.Errorf("pv %s has no claimRef", pv.Name)
+    }
+    if pv.Spec.ClaimRef.Namespace != c.sandboxNS {
+        return fmt.Errorf("pv %s claimRef namespace %s != %s", pv.Name, pv.Spec.ClaimRef.Namespace, c.sandboxNS)
+    }
+    if pv.Spec.ClaimRef.Name != expectedPVCName {
+        return fmt.Errorf("pv %s claimRef name %s != expected pvc %s", pv.Name, pv.Spec.ClaimRef.Name, expectedPVCName)
+    }
+    // Optional: if owner labels exist, verify they match; do not require their presence.
+    if pv.Labels != nil {
+        if v, ok := pv.Labels[LabelManagedBy]; ok && v != ManagedByServer {
+            return fmt.Errorf("pv %s managed-by label mismatch", pv.Name)
+        }
+    }
+    return nil
+}
+
+// validateDeploymentProvenance ensures the Deployment belongs to the expected sandbox in our namespace.
+func (c *Client) validateDeploymentProvenance(deploy *appsv1.Deployment, expectedSandboxID string) error {
+    if deploy == nil {
+        return fmt.Errorf("deployment is nil")
+    }
+    if deploy.Namespace != c.sandboxNS {
+        return fmt.Errorf("deployment %s/%s not in sandbox namespace %s", deploy.Namespace, deploy.Name, c.sandboxNS)
+    }
+    if deploy.Labels == nil {
+        return fmt.Errorf("deployment %s missing labels for provenance check", deploy.Name)
+    }
+    if v, ok := deploy.Labels[LabelManagedBy]; !ok || v != ManagedByServer {
+        return fmt.Errorf("deployment %s not managed by liteboxd-server", deploy.Name)
+    }
+    if v, ok := deploy.Labels[LabelSandboxID]; !ok || v != expectedSandboxID {
+        return fmt.Errorf("deployment %s sandbox-id mismatch", deploy.Name)
+    }
+    if v, ok := deploy.Labels["app"]; !ok || v != LabelApp {
+        return fmt.Errorf("deployment %s app label mismatch", deploy.Name)
+    }
+    return nil
 }
 
 // StopPersistentSandbox scales the sandbox Deployment replicas to 0.
