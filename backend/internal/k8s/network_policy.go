@@ -360,6 +360,26 @@ func (m *NetworkPolicyManager) ApplyDomainAllowlistPolicy(ctx context.Context, s
 	return err
 }
 
+func (m *NetworkPolicyManager) GetDomainAllowlistPolicy(ctx context.Context, sandboxID string) (*unstructured.Unstructured, error) {
+	resource := m.client.dynamicClient.Resource(ciliumPolicyGVR).Namespace(m.client.sandboxNS)
+	return resource.Get(ctx, domainAllowlistPolicyName(sandboxID), metav1.GetOptions{})
+}
+
+func (m *NetworkPolicyManager) ListManagedDomainAllowlistPolicies(ctx context.Context) ([]unstructured.Unstructured, error) {
+	resource := m.client.dynamicClient.Resource(ciliumPolicyGVR).Namespace(m.client.sandboxNS)
+	list, err := resource.List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, err
+	}
+	items := make([]unstructured.Unstructured, 0, len(list.Items))
+	for i := range list.Items {
+		if _, ok := ParseDomainAllowlistPolicyName(list.Items[i].GetName()); ok {
+			items = append(items, list.Items[i])
+		}
+	}
+	return items, nil
+}
+
 func (m *NetworkPolicyManager) DeleteDomainAllowlistPolicy(ctx context.Context, sandboxID string) error {
 	resource := m.client.dynamicClient.Resource(ciliumPolicyGVR).Namespace(m.client.sandboxNS)
 	err := resource.Delete(ctx, domainAllowlistPolicyName(sandboxID), metav1.DeleteOptions{})
@@ -371,6 +391,18 @@ func (m *NetworkPolicyManager) DeleteDomainAllowlistPolicy(ctx context.Context, 
 
 func domainAllowlistPolicyName(sandboxID string) string {
 	return fmt.Sprintf("sandbox-egress-allowlist-%s", sandboxID)
+}
+
+func ParseDomainAllowlistPolicyName(name string) (string, bool) {
+	const prefix = "sandbox-egress-allowlist-"
+	if !strings.HasPrefix(name, prefix) {
+		return "", false
+	}
+	sandboxID := strings.TrimPrefix(name, prefix)
+	if sandboxID == "" {
+		return "", false
+	}
+	return sandboxID, true
 }
 
 func (m *NetworkPolicyManager) domainAllowlistPolicy(sandboxID string, domains []string) *unstructured.Unstructured {

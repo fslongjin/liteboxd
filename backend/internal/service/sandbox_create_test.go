@@ -53,3 +53,44 @@ func TestCreatePersistentSandboxReturnsPendingLifecycle(t *testing.T) {
 		t.Fatalf("StatusReason = %q, want empty", sb.StatusReason)
 	}
 }
+
+func TestCreateSandboxDoesNotApplyDomainAllowlistPolicySynchronously(t *testing.T) {
+	initServiceTestDB(t)
+	ctx := context.Background()
+
+	t.Setenv(security.TokenEncryptionKeyEnv, "0123456789abcdef")
+	cipher, err := security.NewTokenCipherFromEnv()
+	if err != nil {
+		t.Fatalf("NewTokenCipherFromEnv() error = %v", err)
+	}
+
+	templateSvc := NewTemplateService()
+	if _, err := templateSvc.store.Create(ctx, &model.CreateTemplateRequest{
+		Name: "network-async",
+		Spec: model.TemplateSpec{
+			Image:          "busybox:1.36",
+			Command:        []string{"sh", "-c", "sleep 30"},
+			StartupTimeout: 1,
+			Network: &model.NetworkSpec{
+				AllowInternetAccess: true,
+				AllowedDomains:      []string{"example.com"},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("Create template error = %v", err)
+	}
+
+	k8sClient := k8s.NewClientForTestWithDynamic()
+	svc := NewSandboxService(k8sClient, store.NewSandboxStore(), cipher)
+	svc.SetTemplateService(templateSvc)
+
+	sb, err := svc.Create(ctx, &model.CreateSandboxRequest{Template: "network-async"})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	mgr := k8s.NewNetworkPolicyManager(k8sClient)
+	if _, err := mgr.GetDomainAllowlistPolicy(ctx, sb.ID); err == nil {
+		t.Fatalf("expected no domain allowlist policy to be created during Create()")
+	}
+}

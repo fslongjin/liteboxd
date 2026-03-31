@@ -1,0 +1,77 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: liteboxd-network-controller
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: liteboxd-network-controller
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: liteboxd-network-controller
+    spec:
+      terminationGracePeriodSeconds: 30
+      serviceAccountName: liteboxd-network-controller
+      containers:
+        - name: controller
+          image: liteboxd/server:v0.5.0
+          imagePullPolicy: IfNotPresent
+          command:
+            - ./server
+            - network-controller
+          env:
+            - name: DATA_DIR
+              value: /app/data
+            - name: SANDBOX_NAMESPACE
+              valueFrom:
+                configMapKeyRef:
+                  name: liteboxd-config
+                  key: SANDBOX_NAMESPACE
+            - name: CONTROL_NAMESPACE
+              valueFrom:
+                configMapKeyRef:
+                  name: liteboxd-config
+                  key: CONTROL_NAMESPACE
+            - name: PERSISTENT_ROOTFS_HELPER_IMAGE
+              valueFrom:
+                configMapKeyRef:
+                  name: liteboxd-config
+                  key: PERSISTENT_ROOTFS_HELPER_IMAGE
+            - name: NETWORK_POLICY_RECONCILE_INTERVAL
+              value: 10s
+            - name: LOG_LEVEL
+              valueFrom:
+                configMapKeyRef:
+                  name: liteboxd-config
+                  key: LOG_LEVEL
+            - name: LOG_FORMAT
+              valueFrom:
+                configMapKeyRef:
+                  name: liteboxd-config
+                  key: LOG_FORMAT
+            - name: LOG_OUTPUT
+              valueFrom:
+                configMapKeyRef:
+                  name: liteboxd-config
+                  key: LOG_OUTPUT
+          volumeMounts:
+            - name: data
+              mountPath: /app/data
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: liteboxd-api-data

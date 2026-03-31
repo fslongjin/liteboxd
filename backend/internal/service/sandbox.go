@@ -321,21 +321,6 @@ func (s *SandboxService) Create(ctx context.Context, req *model.CreateSandboxReq
 		s.appendStatusHistoryDurable(id, "api", "creating", lifecycleStatus, "pod created")
 	}
 
-	// Only apply domain allowlist policy if internet access is enabled
-	if networkConfig != nil && networkConfig.AllowInternetAccess && len(networkConfig.AllowedDomains) > 0 {
-		netPolicyMgr := k8s.NewNetworkPolicyManager(s.k8sClient)
-		if err := netPolicyMgr.ApplyDomainAllowlistPolicy(ctx, id, networkConfig.AllowedDomains); err != nil {
-			if persistenceEnabled {
-				_ = s.k8sClient.DeletePersistentSandbox(ctx, id, volumeClaimName, persistenceReclaimPolicy)
-			} else {
-				_ = s.k8sClient.DeletePod(ctx, id)
-			}
-			s.updateStatusDurable(id, string(model.SandboxStatusFailed), err.Error())
-			s.appendStatusHistoryDurable(id, "api", lifecycleStatus, string(model.SandboxStatusFailed), "domain allowlist apply failed")
-			return nil, fmt.Errorf("failed to apply domain allowlist policy: %w", err)
-		}
-	}
-
 	sandbox, err := s.recordToSandbox(record)
 	if err != nil {
 		return nil, err

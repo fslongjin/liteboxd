@@ -109,13 +109,6 @@ func (s *SandboxDeletionService) processSandbox(ctx context.Context, rec *store.
 }
 
 func (s *SandboxDeletionService) handleQuiescingRuntime(ctx context.Context, rec *store.SandboxRecord, snapshot *k8s.SandboxDeletionSnapshot, now time.Time) error {
-	if s.k8sClient.GetDynamicClient() != nil {
-		netPolicyMgr := k8s.NewNetworkPolicyManager(s.k8sClient)
-		if err := netPolicyMgr.DeleteDomainAllowlistPolicy(ctx, rec.ID); err != nil {
-			logWithSandboxID(ctx, rec.ID).Warn("failed to delete domain allowlist policy during deletion", "error", err)
-		}
-	}
-
 	if rec.PersistenceEnabled {
 		if snapshot.Deployment != nil {
 			if err := s.k8sClient.DeletePersistentSandbox(ctx, rec.ID, "", "Retain"); err != nil {

@@ -25,6 +25,21 @@ import (
 )
 
 func main() {
+	mode := "server"
+	if len(os.Args) > 1 && os.Args[1] != "" {
+		mode = os.Args[1]
+	}
+	switch mode {
+	case "server":
+		runServer()
+	case "network-controller":
+		runNetworkController()
+	default:
+		log.Fatalf("unknown mode %q", mode)
+	}
+}
+
+func runServer() {
 	logger, closeLogger, err := logx.Init("liteboxd-server")
 	if err != nil {
 		log.Fatalf("Failed to initialize logger: %v", err)
@@ -299,4 +314,80 @@ func main() {
 	}
 
 	log.Println("API server stopped")
+}
+
+func runNetworkController() {
+	logger, closeLogger, err := logx.Init("liteboxd-network-controller")
+	if err != nil {
+		log.Fatalf("Failed to initialize logger: %v", err)
+	}
+	defer func() {
+		if err := closeLogger(); err != nil {
+			slog.Error("failed to close logger", "error", err)
+		}
+	}()
+
+	stdLog := slog.NewLogLogger(logger.Handler(), slog.LevelInfo)
+	log.SetFlags(0)
+	log.SetOutput(stdLog.Writer())
+
+	dataDir := os.Getenv("DATA_DIR")
+	if dataDir == "" {
+		dataDir = "./data"
+	}
+	dbPath := filepath.Join(dataDir, "liteboxd.db")
+
+	slog.Info("initializing database", "component", "store", "db_path", dbPath)
+	if err := store.InitDB(dbPath); err != nil {
+		log.Fatalf("Failed to initialize database: %v", err)
+	}
+	defer store.CloseDB()
+	slog.Info("database initialized", "component", "store")
+
+	kubeconfigPath := os.Getenv("KUBECONFIG")
+	sandboxNamespace := os.Getenv("SANDBOX_NAMESPACE")
+	if sandboxNamespace == "" {
+		sandboxNamespace = k8s.DefaultSandboxNamespace
+	}
+	controlNamespace := os.Getenv("CONTROL_NAMESPACE")
+	if controlNamespace == "" {
+		controlNamespace = k8s.DefaultControlNamespace
+	}
+	persistentRootFSHelperImage := os.Getenv("PERSISTENT_ROOTFS_HELPER_IMAGE")
+
+	k8sClient, err := k8s.NewClient(k8s.ClientConfig{
+		KubeconfigPath:              kubeconfigPath,
+		SandboxNamespace:            sandboxNamespace,
+		ControlNamespace:            controlNamespace,
+		PersistentRootFSHelperImage: persistentRootFSHelperImage,
+	})
+	if err != nil {
+		log.Fatalf("Failed to create k8s client: %v", err)
+	}
+
+	ctx := context.Background()
+	if err := k8sClient.EnsureNamespace(ctx); err != nil {
+		log.Fatalf("Failed to ensure namespace: %v", err)
+	}
+
+	interval := 10 * time.Second
+	if v := os.Getenv("NETWORK_POLICY_RECONCILE_INTERVAL"); v != "" {
+		if parsed, err := time.ParseDuration(v); err == nil && parsed > 0 {
+			interval = parsed
+		} else {
+			slog.Warn("invalid NETWORK_POLICY_RECONCILE_INTERVAL, fallback to default", "value", v, "default", interval.String())
+		}
+	}
+
+	reconciler := service.NewSandboxNetworkPolicyReconciler(k8sClient, store.NewSandboxStore(), store.NewTemplateStore())
+	if err := reconciler.RunOnce(ctx); err != nil {
+		slog.Warn("startup network policy reconcile failed", "component", "sandbox_network_policy_reconciler", "error", err)
+	}
+	reconciler.Start(interval)
+	slog.Info("sandbox network policy reconciler started", "component", "sandbox_network_policy_reconciler", "interval", interval.String())
+
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+	log.Println("Shutting down network controller...")
 }
