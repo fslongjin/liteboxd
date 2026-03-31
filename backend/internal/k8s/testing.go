@@ -19,5 +19,7 @@ func NewClientForTestWithSetup(setup func(*kubefake.Clientset), objects ...runti
 		sandboxNS:                   DefaultSandboxNamespace,
 		controlNS:                   DefaultControlNamespace,
 		persistentRootFSHelperImage: DefaultPersistentRootFSHelperImage,
+		sandboxNoFileLimit:          DefaultSandboxNoFileLimit,
+		sandboxLauncherImage:        "liteboxd/sandbox-launcher:test",
 	}
 }

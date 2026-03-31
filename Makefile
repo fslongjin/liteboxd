@@ -1,5 +1,5 @@
 .PHONY: help run-backend run-gateway run-frontend run-all \
-	build-backend build-gateway build-frontend build-sdk build-cli build-installer build-all \
+	build-backend build-gateway build-launcher build-frontend build-sdk build-cli build-installer build-all \
 	clean fmt test test-sdk test-cli test-installer deploy-k8s port-forward-k8s
 
 # Output directory
@@ -14,6 +14,7 @@ help:
 	@echo "  make run-all              - Run backend, gateway and frontend"
 	@echo "  make build-backend        - Build backend binary"
 	@echo "  make build-gateway        - Build gateway binary"
+	@echo "  make build-launcher       - Build sandbox launcher binary"
 	@echo "  make build-frontend       - Build frontend for production"
 	@echo "  make build-sdk            - Build Go SDK"
 	@echo "  make build-cli            - Build CLI tool"
@@ -57,6 +58,12 @@ build-gateway:
 	cd backend && go build -o $(OUTPUT_DIR)/liteboxd-gateway ./cmd/gateway
 	@echo "Gateway built: $(OUTPUT_DIR)/liteboxd-gateway"
 
+build-launcher:
+	@echo "Building sandbox launcher..."
+	@mkdir -p $(OUTPUT_DIR)
+	cd backend && go build -o $(OUTPUT_DIR)/sandbox-launcher ./cmd/sandbox-launcher
+	@echo "Launcher built: $(OUTPUT_DIR)/sandbox-launcher"
+
 build-frontend:
 	@echo "Building frontend..."
 	cd web && npm run build
@@ -80,7 +87,7 @@ build-installer:
 	cd tools/liteboxd-installer && GOCACHE=/tmp/go-build go build -o $(OUTPUT_DIR)/liteboxd-installer .
 	@echo "Installer built: $(OUTPUT_DIR)/liteboxd-installer"
 
-build-all: build-backend build-gateway build-cli build-installer
+build-all: build-backend build-gateway build-launcher build-cli build-installer
 	@echo "All builds complete!"
 
 # Tests

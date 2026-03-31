@@ -42,6 +42,8 @@ type ClientConfig struct {
 	SandboxNamespace            string
 	ControlNamespace            string
 	PersistentRootFSHelperImage string
+	SandboxNoFileLimit          int
+	SandboxLauncherImage        string
 }
 
 func (cfg ClientConfig) applyDefaults() ClientConfig {
@@ -65,6 +67,8 @@ type Client struct {
 	controlNS     string
 
 	persistentRootFSHelperImage string
+	sandboxNoFileLimit          int
+	sandboxLauncherImage        string
 }
 
 func NewClient(cfg ClientConfig) (*Client, error) {
@@ -99,6 +103,8 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 		sandboxNS:                   cfg.SandboxNamespace,
 		controlNS:                   cfg.ControlNamespace,
 		persistentRootFSHelperImage: cfg.PersistentRootFSHelperImage,
+		sandboxNoFileLimit:          cfg.SandboxNoFileLimit,
+		sandboxLauncherImage:        cfg.SandboxLauncherImage,
 	}, nil
 }
 
@@ -148,6 +154,7 @@ type CreatePodOptions struct {
 	ReadinessProbe *ProbeSpec   // Readiness probe configuration
 	Network        *NetworkSpec // Network configuration
 	AccessToken    string       // Access token injected by control-plane (optional)
+	NoFileLimit    int
 }
 
 // NetworkSpec defines the network configuration for a pod
@@ -289,6 +296,18 @@ func (c *Client) CreatePod(ctx context.Context, opts CreatePodOptions) (*corev1.
 		},
 	}
 
+	if c.launcherEnabled() {
+		command, args, err := c.buildLauncherWrappedStartCommand(ctx, opts)
+		if err != nil {
+			return nil, err
+		}
+		pod.Spec.Containers[0].Command = command
+		pod.Spec.Containers[0].Args = args
+		pod.Spec.Containers[0].VolumeMounts = append(pod.Spec.Containers[0].VolumeMounts, sandboxLauncherMount(true))
+		pod.Spec.InitContainers = append(pod.Spec.InitContainers, c.sandboxLauncherInitContainer())
+		pod.Spec.Volumes = append(pod.Spec.Volumes, c.sandboxLauncherVolume())
+	}
+
 	return c.clientset.CoreV1().Pods(c.sandboxNS).Create(ctx, pod, metav1.CreateOptions{})
 }
 
@@ -370,6 +389,7 @@ func (c *Client) Exec(ctx context.Context, sandboxID string, command []string) (
 		return nil, fmt.Errorf("failed to resolve sandbox pod: %w", err)
 	}
 	command = wrapCommandForRootFS(pod, command)
+	command = c.wrapCommandWithLauncher(command)
 
 	req := c.clientset.CoreV1().RESTClient().Post().
 		Resource("pods").
@@ -904,6 +924,7 @@ func (c *Client) ExecInteractive(ctx context.Context, sandboxID string, opts Exe
 		return fmt.Errorf("failed to resolve sandbox pod: %w", err)
 	}
 	command := wrapCommandForRootFS(pod, opts.Command)
+	command = c.wrapCommandWithLauncher(command)
 
 	req := c.clientset.CoreV1().RESTClient().Post().
 		Resource("pods").

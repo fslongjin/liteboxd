@@ -100,12 +100,26 @@ func main() {
 		controlNamespace = k8s.DefaultControlNamespace
 	}
 	persistentRootFSHelperImage := os.Getenv("PERSISTENT_ROOTFS_HELPER_IMAGE")
+	sandboxNoFileLimit := k8s.DefaultSandboxNoFileLimit
+	if v := os.Getenv("SANDBOX_NOFILE_LIMIT"); v != "" {
+		parsed, err := strconv.Atoi(v)
+		if err != nil || parsed < 0 {
+			log.Fatalf("Invalid SANDBOX_NOFILE_LIMIT: %q", v)
+		}
+		sandboxNoFileLimit = parsed
+	}
+	sandboxLauncherImage := os.Getenv("SANDBOX_LAUNCHER_IMAGE")
+	if sandboxNoFileLimit > 0 && sandboxLauncherImage == "" {
+		log.Fatalf("SANDBOX_LAUNCHER_IMAGE is required when SANDBOX_NOFILE_LIMIT > 0")
+	}
 
 	k8sClient, err := k8s.NewClient(k8s.ClientConfig{
 		KubeconfigPath:              kubeconfigPath,
 		SandboxNamespace:            sandboxNamespace,
 		ControlNamespace:            controlNamespace,
 		PersistentRootFSHelperImage: persistentRootFSHelperImage,
+		SandboxNoFileLimit:          sandboxNoFileLimit,
+		SandboxLauncherImage:        sandboxLauncherImage,
 	})
 	if err != nil {
 		log.Fatalf("Failed to create k8s client: %v", err)

@@ -109,9 +109,10 @@ type SecurityConfig struct {
 }
 
 type ImageConfig struct {
-	API     string `yaml:"api"`
-	Gateway string `yaml:"gateway"`
-	Web     string `yaml:"web"`
+	API      string `yaml:"api"`
+	Gateway  string `yaml:"gateway"`
+	Launcher string `yaml:"launcher"`
+	Web      string `yaml:"web"`
 }
 
 type RuntimeConfig struct {
@@ -327,8 +328,8 @@ func (c *Config) Validate(opts LoadOptions) error {
 		if c.LiteBoxd.ConfigDir == "" {
 			return errors.New("liteboxd.configDir is required")
 		}
-		if c.LiteBoxd.Images.API == "" || c.LiteBoxd.Images.Gateway == "" || c.LiteBoxd.Images.Web == "" {
-			return errors.New("liteboxd.images.api/gateway/web are required")
+		if c.LiteBoxd.Images.API == "" || c.LiteBoxd.Images.Gateway == "" || c.LiteBoxd.Images.Launcher == "" || c.LiteBoxd.Images.Web == "" {
+			return errors.New("liteboxd.images.api/gateway/launcher/web are required")
 		}
 		if _, err := os.Stat(c.LiteBoxd.ConfigDir); err != nil {
 			return fmt.Errorf("liteboxd.configDir %q is invalid: %w", c.LiteBoxd.ConfigDir, err)

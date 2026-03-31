@@ -4,12 +4,10 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
-	"github.com/google/go-containerregistry/pkg/authn"
-	"github.com/google/go-containerregistry/pkg/name"
-	"github.com/google/go-containerregistry/pkg/v1/remote"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
@@ -108,7 +106,7 @@ func (c *Client) CreatePersistentSandbox(ctx context.Context, opts CreatePersist
 	if _, err := resource.ParseQuantity(opts.VolumeSize); err != nil {
 		return nil, fmt.Errorf("invalid volume size: %w", err)
 	}
-	command, args, err := resolvePersistentStartCommand(ctx, opts)
+	command, args, err := resolveSandboxStartCommand(ctx, opts.Image, opts.Command, opts.Args)
 	if err != nil {
 		return nil, err
 	}
@@ -162,6 +160,13 @@ func (c *Client) CreatePersistentSandbox(ctx context.Context, opts CreatePersist
 		corev1.EnvVar{Name: "LITEBOXD_ROOTFS_CONTROL_DIR", Value: rootfsOverlayControlDir},
 		corev1.EnvVar{Name: "LITEBOXD_ROOTFS_MOUNT_TARGET", Value: rootfsOverlayMountTarget},
 	)
+	if c.launcherEnabled() {
+		mainContainer.VolumeMounts = append(mainContainer.VolumeMounts, sandboxLauncherMount(true))
+		mainContainer.Env = append(mainContainer.Env, corev1.EnvVar{
+			Name:  "LITEBOXD_NOFILE_LIMIT",
+			Value: strconv.Itoa(c.sandboxNoFileLimit),
+		})
+	}
 	// Kubernetes/containerd cannot mount a volume directly to "/" in container rootfs.
 	// Keep the business container unprivileged and let it wait for a privileged helper to
 	// mount the overlay inside this container's mount namespace before chrooting.
@@ -229,6 +234,27 @@ func (c *Client) CreatePersistentSandbox(ctx context.Context, opts CreatePersist
 	}
 
 	replicas := int32(1)
+	initContainers := []corev1.Container{prepInitContainer}
+	volumes := []corev1.Volume{
+		{
+			Name: rootfsOverlayVolumeName,
+			VolumeSource: corev1.VolumeSource{
+				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+					ClaimName: claimName,
+				},
+			},
+		},
+		{
+			Name: rootfsOverlayControlVolumeName,
+			VolumeSource: corev1.VolumeSource{
+				EmptyDir: &corev1.EmptyDirVolumeSource{},
+			},
+		},
+	}
+	if c.launcherEnabled() {
+		initContainers = append([]corev1.Container{c.sandboxLauncherInitContainer()}, initContainers...)
+		volumes = append(volumes, c.sandboxLauncherVolume())
+	}
 	deployment := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        deployName,
@@ -272,24 +298,9 @@ func (c *Client) CreatePersistentSandbox(ctx context.Context, opts CreatePersist
 							Type: corev1.SeccompProfileTypeRuntimeDefault,
 						},
 					},
-					InitContainers: []corev1.Container{prepInitContainer},
+					InitContainers: initContainers,
 					Containers:     []corev1.Container{mainContainer, helperContainer},
-					Volumes: []corev1.Volume{
-						{
-							Name: rootfsOverlayVolumeName,
-							VolumeSource: corev1.VolumeSource{
-								PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-									ClaimName: claimName,
-								},
-							},
-						},
-						{
-							Name: rootfsOverlayControlVolumeName,
-							VolumeSource: corev1.VolumeSource{
-								EmptyDir: &corev1.EmptyDirVolumeSource{},
-							},
-						},
-					},
+					Volumes:        volumes,
 				},
 			},
 		},
@@ -301,51 +312,6 @@ func (c *Client) CreatePersistentSandbox(ctx context.Context, opts CreatePersist
 		return nil, fmt.Errorf("failed to create persistent sandbox deployment: %w", err)
 	}
 	return created, nil
-}
-
-func resolvePersistentStartCommand(ctx context.Context, opts CreatePersistentSandboxOptions) ([]string, []string, error) {
-	if len(opts.Command) > 0 {
-		return append([]string(nil), opts.Command...), append([]string(nil), opts.Args...), nil
-	}
-
-	entrypoint, imageCmd, err := resolveImageEntrypointAndCmd(ctx, opts.Image)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to resolve image entrypoint/cmd for persistent sandbox: %w", err)
-	}
-
-	if len(opts.Args) > 0 {
-		if len(entrypoint) > 0 {
-			return entrypoint, append([]string(nil), opts.Args...), nil
-		}
-		return append([]string(nil), opts.Args...), nil, nil
-	}
-	if len(entrypoint) > 0 {
-		return entrypoint, imageCmd, nil
-	}
-	if len(imageCmd) > 0 {
-		return imageCmd, nil, nil
-	}
-
-	return nil, nil, fmt.Errorf("unable to determine start command: template command is empty and image %q has no entrypoint/cmd", opts.Image)
-}
-
-func resolveImageEntrypointAndCmd(ctx context.Context, image string) ([]string, []string, error) {
-	ref, err := name.ParseReference(image, name.WeakValidation)
-	if err != nil {
-		return nil, nil, fmt.Errorf("invalid image reference %q: %w", image, err)
-	}
-	img, err := remote.Image(ref, remote.WithContext(ctx), remote.WithAuthFromKeychain(authn.DefaultKeychain))
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to fetch image metadata: %w", err)
-	}
-	cfg, err := img.ConfigFile()
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to read image config: %w", err)
-	}
-
-	entrypoint := append([]string(nil), cfg.Config.Entrypoint...)
-	cmd := append([]string(nil), cfg.Config.Cmd...)
-	return entrypoint, cmd, nil
 }
 
 func (c *Client) ensurePersistentVolumeClaim(ctx context.Context, claimName, storageClass, size string) error {
@@ -694,7 +660,11 @@ while :; do
 done
 
 log "rootfs ready, launching sandbox command"
-chroot "$MERGED" "$@" &
+if [ -n "${LITEBOXD_NOFILE_LIMIT:-}" ] && [ -x %q ]; then
+  %q --nofile "${LITEBOXD_NOFILE_LIMIT}" -- chroot "$MERGED" "$@" &
+else
+  chroot "$MERGED" "$@" &
+fi
 CHILD_PID=$!
 set +e
 wait "$CHILD_PID"
@@ -703,7 +673,7 @@ set -e
 CHILD_PID=""
 request_unmount
 exit "$STATUS"
-`, rootfsOverlayMountTarget, rootfsOverlayControlDir, rootfsOverlayMergedSub)
+`, rootfsOverlayMountTarget, rootfsOverlayControlDir, rootfsOverlayMergedSub, sandboxLauncherBinaryPath, sandboxLauncherBinaryPath)
 }
 
 func buildRootfsOverlayHelperScript() string {

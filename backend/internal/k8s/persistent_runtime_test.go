@@ -21,6 +21,8 @@ func newTestClientWithFakeClientset(objects ...runtime.Object) *Client {
 		sandboxNS:                   DefaultSandboxNamespace,
 		controlNS:                   DefaultControlNamespace,
 		persistentRootFSHelperImage: DefaultPersistentRootFSHelperImage,
+		sandboxNoFileLimit:          DefaultSandboxNoFileLimit,
+		sandboxLauncherImage:        "liteboxd/sandbox-launcher:test",
 	}
 }
 
@@ -161,11 +163,19 @@ func TestCreatePersistentSandboxUsesHelperSidecarAndControlVolume(t *testing.T) 
 	if deploy.Spec.Template.Spec.ShareProcessNamespace == nil || !*deploy.Spec.Template.Spec.ShareProcessNamespace {
 		t.Fatalf("ShareProcessNamespace not enabled")
 	}
-	if got := len(deploy.Spec.Template.Spec.InitContainers); got != 1 {
-		t.Fatalf("InitContainers len = %d, want 1", got)
+	if got := len(deploy.Spec.Template.Spec.InitContainers); got != 2 {
+		t.Fatalf("InitContainers len = %d, want 2", got)
 	}
 	if got := len(deploy.Spec.Template.Spec.Containers); got != 2 {
 		t.Fatalf("Containers len = %d, want 2", got)
+	}
+
+	launcherInit := deploy.Spec.Template.Spec.InitContainers[0]
+	if launcherInit.Name != sandboxLauncherInitName {
+		t.Fatalf("launcher init name = %q, want %q", launcherInit.Name, sandboxLauncherInitName)
+	}
+	if !hasVolumeMount(launcherInit.VolumeMounts, sandboxLauncherVolumeName, sandboxLauncherMountDir) {
+		t.Fatalf("launcher init mount not found")
 	}
 
 	main := deploy.Spec.Template.Spec.Containers[0]
@@ -197,13 +207,20 @@ func TestCreatePersistentSandboxUsesHelperSidecarAndControlVolume(t *testing.T) 
 	if !hasVolumeMount(main.VolumeMounts, rootfsOverlayControlVolumeName, rootfsOverlayControlDir) {
 		t.Fatalf("main container control mount not found")
 	}
+	if !hasVolumeMount(main.VolumeMounts, sandboxLauncherVolumeName, sandboxLauncherMountDir) {
+		t.Fatalf("main container launcher mount not found")
+	}
 	if hasVolumeMount(main.VolumeMounts, "workspace", "/workspace") {
 		t.Fatalf("main container should not inherit workspace mount")
+	}
+	if len(main.Env) == 0 || main.Env[len(main.Env)-1].Name != "LITEBOXD_NOFILE_LIMIT" {
+		t.Fatalf("main container missing LITEBOXD_NOFILE_LIMIT env: %v", main.Env)
 	}
 
 	assertMountsHaveNoPropagation(t, main.VolumeMounts)
 	assertMountsHaveNoPropagation(t, helper.VolumeMounts)
 	assertMountsHaveNoPropagation(t, deploy.Spec.Template.Spec.InitContainers[0].VolumeMounts)
+	assertMountsHaveNoPropagation(t, deploy.Spec.Template.Spec.InitContainers[1].VolumeMounts)
 
 	if !hasVolume(deploy.Spec.Template.Spec.Volumes, rootfsOverlayControlVolumeName, func(v corev1.VolumeSource) bool {
 		return v.EmptyDir != nil
@@ -214,6 +231,11 @@ func TestCreatePersistentSandboxUsesHelperSidecarAndControlVolume(t *testing.T) 
 		return v.PersistentVolumeClaim != nil && v.PersistentVolumeClaim.ClaimName == "sandbox-data-persist1"
 	}) {
 		t.Fatalf("rootfs PVC volume not found")
+	}
+	if !hasVolume(deploy.Spec.Template.Spec.Volumes, sandboxLauncherVolumeName, func(v corev1.VolumeSource) bool {
+		return v.EmptyDir != nil
+	}) {
+		t.Fatalf("sandbox launcher volume not found")
 	}
 	if hasVolume(deploy.Spec.Template.Spec.Volumes, "workspace", func(v corev1.VolumeSource) bool {
 		return true
@@ -243,7 +265,7 @@ func TestCreatePersistentSandboxUsesConfiguredHelperImage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get deployment error = %v", err)
 	}
-	if got := deploy.Spec.Template.Spec.InitContainers[0].Image; got != "registry.example.com/rootfs-helper:dev" {
+	if got := deploy.Spec.Template.Spec.InitContainers[1].Image; got != "registry.example.com/rootfs-helper:dev" {
 		t.Fatalf("init image = %q, want configured helper image", got)
 	}
 	if got := deploy.Spec.Template.Spec.Containers[1].Image; got != "registry.example.com/rootfs-helper:dev" {

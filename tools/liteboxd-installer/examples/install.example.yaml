@@ -59,9 +59,9 @@ storage:
 liteboxd:
   namespaceSystem: "liteboxd-system"
   namespaceSandbox: "liteboxd-sandbox"
-  ingressHost: "liteboxd.example.com"
-  gatewayIngressHost: "gateway.example.com"
-  gatewayURL: "http://gateway.example.com"
+  ingressHost: "longjin.dev.liteboxd.com.local"
+  gatewayIngressHost: "gateway.longjin.dev.liteboxd.com.local"
+  gatewayURL: "http://gateway.longjin.dev.liteboxd.com.local"
   metadataRetentionDays: 7
   security:
     sandboxTokenEncryptionKey: "${SANDBOX_TOKEN_KEY}"
@@ -70,9 +70,10 @@ liteboxd:
     adminInitialPassword: "${LITEBOXD_ADMIN_INITIAL_PASSWORD}"
   configDir: "./deploy-config/prod"
   images:
-    api: "registry.example.com/liteboxd/liteboxd-server:v0.5.0"
-    gateway: "registry.example.com/liteboxd/liteboxd-gateway:v0.5.0"
-    web: "registry.example.com/liteboxd/web:v0.5.0"
+    api: "dragonos-registry.ringotek.cn/liteboxd/liteboxd-server:260316-1"
+    gateway: "dragonos-registry.ringotek.cn/liteboxd/liteboxd-gateway:260316-1"
+    launcher: "dragonos-registry.ringotek.cn/liteboxd/liteboxd-sandbox-launcher:260316-1"
+    web: "dragonos-registry.ringotek.cn/liteboxd/web:260316-1"
   deploySandboxResources: true
 
 runtime:

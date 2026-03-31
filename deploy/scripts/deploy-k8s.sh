@@ -30,6 +30,7 @@ fi
 REGISTRY="${REGISTRY%/}"
 API_IMAGE="${REGISTRY}/liteboxd-server:${TAG}"
 GATEWAY_IMAGE="${REGISTRY}/liteboxd-gateway:${TAG}"
+LAUNCHER_IMAGE="${REGISTRY}/liteboxd-sandbox-launcher:${TAG}"
 WEB_IMAGE="${REGISTRY}/web:${TAG}"
 
 TMP_DIR="$(mktemp -d)"
@@ -52,6 +53,13 @@ kind: Kustomization
 resources:
   - ./system
 patches:
+  - target:
+      kind: ConfigMap
+      name: liteboxd-config
+    patch: |-
+      - op: replace
+        path: /data/SANDBOX_LAUNCHER_IMAGE
+        value: ${LAUNCHER_IMAGE}
   - target:
       kind: Deployment
       name: liteboxd-api

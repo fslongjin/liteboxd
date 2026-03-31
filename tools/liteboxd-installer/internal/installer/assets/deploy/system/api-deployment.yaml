@@ -74,6 +74,16 @@ spec:
                 configMapKeyRef:
                   name: liteboxd-config
                   key: SANDBOX_METADATA_RETENTION_DAYS
+            - name: SANDBOX_NOFILE_LIMIT
+              valueFrom:
+                configMapKeyRef:
+                  name: liteboxd-config
+                  key: SANDBOX_NOFILE_LIMIT
+            - name: SANDBOX_LAUNCHER_IMAGE
+              valueFrom:
+                configMapKeyRef:
+                  name: liteboxd-config
+                  key: SANDBOX_LAUNCHER_IMAGE
             - name: PERSISTENT_ROOTFS_HELPER_IMAGE
               valueFrom:
                 configMapKeyRef:

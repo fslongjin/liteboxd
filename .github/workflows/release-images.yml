@@ -24,6 +24,10 @@ jobs:
             context: ./backend
             dockerfile: ./backend/Dockerfile.gateway
             image: liteboxd-gateway
+          - name: sandbox-launcher
+            context: ./backend
+            dockerfile: ./backend/Dockerfile.launcher
+            image: liteboxd-sandbox-launcher
           - name: web
             context: ./web
             dockerfile: ./web/Dockerfile

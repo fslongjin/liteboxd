@@ -78,6 +78,7 @@ func (i *Installer) systemOverlayKustomization() string {
 	b.WriteString("  - target:\n      kind: Namespace\n      name: liteboxd-system\n    patch: |-\n      - op: replace\n        path: /metadata/name\n        value: " + sysNS + "\n")
 	b.WriteString("  - target:\n      kind: ClusterRoleBinding\n      name: liteboxd-api-cluster\n    patch: |-\n      - op: replace\n        path: /subjects/0/namespace\n        value: " + sysNS + "\n")
 	b.WriteString("  - target:\n      kind: ConfigMap\n      name: liteboxd-config\n    patch: |-\n      - op: replace\n        path: /data/SANDBOX_NAMESPACE\n        value: " + sandboxNS + "\n      - op: replace\n        path: /data/CONTROL_NAMESPACE\n        value: " + sysNS + "\n      - op: replace\n        path: /data/GATEWAY_URL\n        value: " + gatewayURL + "\n      - op: replace\n        path: /data/SANDBOX_METADATA_RETENTION_DAYS\n        value: \"" + strconv.Itoa(retentionDays) + "\"\n")
+	b.WriteString("      - op: replace\n        path: /data/SANDBOX_LAUNCHER_IMAGE\n        value: " + i.cfg.LiteBoxd.Images.Launcher + "\n")
 	if tokenKey != "" {
 		b.WriteString("      - op: replace\n        path: /data/SANDBOX_TOKEN_ENCRYPTION_KEY\n        value: " + tokenKey + "\n")
 	}
