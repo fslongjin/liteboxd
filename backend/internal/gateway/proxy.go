@@ -1,18 +1,105 @@
 package gateway
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/fslongjin/liteboxd/backend/internal/logx"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 	"k8s.io/client-go/rest"
+	k8sws "k8s.io/client-go/transport/websocket"
 )
+
+const wsProxyCloseWriteTimeout = 3 * time.Second
+
+var wsProxySessionSeq atomic.Uint64
+
+type safeWSConn struct {
+	name string
+	conn *websocket.Conn
+	mu   sync.Mutex
+}
+
+func newSafeWSConn(name string, conn *websocket.Conn) *safeWSConn {
+	return &safeWSConn{name: name, conn: conn}
+}
+
+func (c *safeWSConn) WriteMessage(messageType int, data []byte) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.conn.WriteMessage(messageType, data)
+}
+
+func (c *safeWSConn) WriteControl(messageType int, data []byte, deadline time.Time) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	err := c.conn.WriteControl(messageType, data, deadline)
+	if errors.Is(err, websocket.ErrCloseSent) {
+		return nil
+	}
+	return err
+}
+
+func (c *safeWSConn) Close() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.conn.Close()
+}
+
+type wsRelayResult struct {
+	Direction string
+	Source    string
+	Target    string
+	Stage     string
+	Err       error
+	CloseErr  *websocket.CloseError
+}
+
+func (r wsRelayResult) notifyPeer() string {
+	switch r.Stage {
+	case "read":
+		return r.Target
+	case "write":
+		return r.Source
+	default:
+		return ""
+	}
+}
+
+func (r wsRelayResult) failureSide() string {
+	switch r.Stage {
+	case "read":
+		return r.Source
+	case "write":
+		return r.Target
+	default:
+		return ""
+	}
+}
+
+func (r wsRelayResult) logLevel() slog.Level {
+	if r.CloseErr != nil && (r.CloseErr.Code == websocket.CloseNormalClosure || r.CloseErr.Code == websocket.CloseGoingAway) {
+		return slog.LevelInfo
+	}
+	if r.Stage == "context" {
+		return slog.LevelInfo
+	}
+	return slog.LevelWarn
+}
+
+func newWSProxySessionID() string {
+	return fmt.Sprintf("wsproxy-%d", wsProxySessionSeq.Add(1))
+}
 
 // ProxyHandler handles proxying requests to sandbox pods
 func (s *Service) ProxyHandler(c *gin.Context) {
@@ -188,8 +275,10 @@ func (s *Service) ProxyHandler(c *gin.Context) {
 // handleWebSocketUpgrade handles WebSocket upgrade requests
 // Note: Full WebSocket support requires additional libraries like gorilla/websocket
 func (s *Service) handleWebSocketUpgrade(c *gin.Context, target *url.URL) {
+	sessionID := newWSProxySessionID()
 	logger := logx.LoggerWithRequestID(c.Request.Context()).With(
 		"component", "gateway_proxy",
+		"ws_session_id", sessionID,
 		"sandbox_id", c.Param(sandboxIDParam),
 		"port", c.GetString("port"),
 	)
@@ -210,42 +299,16 @@ func (s *Service) handleWebSocketUpgrade(c *gin.Context, target *url.URL) {
 	var dialer *websocket.Dialer
 
 	if s.config.UseK8sProxy {
-		k8sConfig := s.k8sClient.GetConfig()
 		podName := fmt.Sprintf("sandbox-%s", sandboxID)
 		k8sProxyPath := fmt.Sprintf("/api/v1/namespaces/%s/pods/%s:%s/proxy%s",
 			s.k8sClient.SandboxNamespace(), podName, port, realPath)
 		backendURL = &url.URL{
-			Scheme:   wsSchemeFromTarget(target),
+			Scheme:   target.Scheme,
 			Host:     target.Host,
 			Path:     k8sProxyPath,
 			RawQuery: c.Request.URL.RawQuery,
 		}
 		header = cloneWebSocketHeaders(c.Request.Header, false)
-		if k8sConfig.BearerToken != "" {
-			header.Set("Authorization", "Bearer "+k8sConfig.BearerToken)
-		}
-		roundTripper, err := rest.TransportFor(k8sConfig)
-		if err != nil {
-			logger.Error("failed to build k8s transport for websocket", "error", err)
-			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
-				"error": "failed to build k8s transport: " + err.Error(),
-			})
-			return
-		}
-		transport, ok := roundTripper.(*http.Transport)
-		if !ok {
-			logger.Error("unexpected k8s transport type for websocket")
-			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
-				"error": "failed to build k8s transport: unexpected transport type",
-			})
-			return
-		}
-		dialer = &websocket.Dialer{
-			Proxy:            http.ProxyFromEnvironment,
-			HandshakeTimeout: 45 * time.Second,
-			TLSClientConfig:  transport.TLSClientConfig,
-			NetDialContext:   transport.DialContext,
-		}
 	} else {
 		backendURL = &url.URL{
 			Scheme:   wsSchemeFromTarget(target),
@@ -260,7 +323,16 @@ func (s *Service) handleWebSocketUpgrade(c *gin.Context, target *url.URL) {
 		}
 	}
 
-	backendConn, resp, err := dialer.Dial(backendURL.String(), header)
+	var (
+		backendConn *websocket.Conn
+		resp        *http.Response
+		err         error
+	)
+	if s.config.UseK8sProxy {
+		backendConn, resp, err = dialK8sBackendWebSocket(c.Request.Context(), s.k8sClient.GetConfig(), backendURL, header)
+	} else {
+		backendConn, resp, err = dialer.Dial(backendURL.String(), header)
+	}
 	if err != nil {
 		status := http.StatusBadGateway
 		if resp != nil {
@@ -288,29 +360,22 @@ func (s *Service) handleWebSocketUpgrade(c *gin.Context, target *url.URL) {
 		logger.Warn("failed to upgrade client websocket", "error", err)
 		return
 	}
-	defer clientConn.Close()
 
 	release := func() {}
 	if s.drainState != nil {
 		release = s.drainState.TrackWebSocket()
 	}
 	defer release()
-	logger.Info("websocket proxy connected", "target", backendURL.String())
+	logger.Info("websocket proxy connected",
+		"backend_url", backendURL.String(),
+		"client_remote_addr", c.Request.RemoteAddr,
+		"request_path", c.Request.URL.Path,
+		"request_query", c.Request.URL.RawQuery,
+		"use_k8s_proxy", s.config.UseK8sProxy,
+		"subprotocol", backendConn.Subprotocol(),
+	)
 
-	errChan := make(chan error, 2)
-	go func() {
-		errChan <- relayWebSocketMessages(clientConn, backendConn)
-	}()
-	go func() {
-		errChan <- relayWebSocketMessages(backendConn, clientConn)
-	}()
-
-	select {
-	case <-c.Request.Context().Done():
-		logger.Debug("websocket proxy context canceled")
-	case <-errChan:
-		logger.Debug("websocket relay finished")
-	}
+	runWebSocketProxySession(c.Request.Context(), logger, sessionID, clientConn, backendConn)
 	logger.Info("websocket proxy disconnected")
 }
 
@@ -345,6 +410,47 @@ func extractTargetPath(path string) string {
 	return "/"
 }
 
+func dialK8sBackendWebSocket(ctx context.Context, config *rest.Config, backendURL *url.URL, header http.Header) (*websocket.Conn, *http.Response, error) {
+	if config == nil {
+		return nil, nil, errors.New("missing k8s config")
+	}
+	if backendURL == nil {
+		return nil, nil, errors.New("missing websocket backend url")
+	}
+
+	requestHeader := cloneHeader(header)
+	requestHeader.Del("Authorization")
+
+	roundTripper, connectionHolder, err := k8sws.RoundTripperFor(config)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, backendURL.String(), nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	req.Header = requestHeader
+
+	resp, err := roundTripper.RoundTrip(req)
+	if err != nil {
+		return nil, resp, err
+	}
+	if resp != nil && resp.Body != nil {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			if conn := connectionHolder.Connection(); conn != nil {
+				_ = conn.Close()
+			}
+			return nil, resp, fmt.Errorf("close websocket upgrade response body: %w", closeErr)
+		}
+	}
+	conn := connectionHolder.Connection()
+	if conn == nil {
+		return nil, resp, errors.New("k8s websocket dial did not return a connection")
+	}
+	return conn, resp, nil
+}
+
 func cloneWebSocketHeaders(src http.Header, removeAccessToken bool) http.Header {
 	dst := http.Header{}
 	for key, values := range src {
@@ -362,14 +468,219 @@ func cloneWebSocketHeaders(src http.Header, removeAccessToken bool) http.Header 
 	return dst
 }
 
-func relayWebSocketMessages(dst, src *websocket.Conn) error {
+func cloneHeader(src http.Header) http.Header {
+	if src == nil {
+		return http.Header{}
+	}
+	dst := make(http.Header, len(src))
+	for key, values := range src {
+		dst[key] = append([]string(nil), values...)
+	}
+	return dst
+}
+
+func runWebSocketProxySession(ctx context.Context, logger *slog.Logger, sessionID string, clientConn, backendConn *websocket.Conn) {
+	client := newSafeWSConn("client", clientConn)
+	backend := newSafeWSConn("backend", backendConn)
+	defer func() {
+		_ = client.Close()
+		_ = backend.Close()
+	}()
+
+	errCh := make(chan wsRelayResult, 2)
+	go func() {
+		errCh <- relayWebSocketMessages(backend, clientConn, "client_to_backend")
+	}()
+	go func() {
+		errCh <- relayWebSocketMessages(client, backendConn, "backend_to_client")
+	}()
+
+	var first wsRelayResult
+	select {
+	case <-ctx.Done():
+		first = wsRelayResult{
+			Direction: "proxy_context",
+			Source:    "context",
+			Target:    "both",
+			Stage:     "context",
+			Err:       ctx.Err(),
+		}
+	case first = <-errCh:
+	}
+
+	logRelayResult(logger, sessionID, "websocket relay finished", first)
+	handleRelayTermination(logger, sessionID, client, backend, first)
+
+	// Give the opposite relay goroutine a brief chance to observe the propagated close,
+	// which improves close-frame delivery without stalling shutdown for long.
+	select {
+	case second := <-errCh:
+		logRelayResult(logger, sessionID, "websocket relay peer finished", second)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+func relayWebSocketMessages(dst *safeWSConn, src *websocket.Conn, direction string) wsRelayResult {
+	srcName := "backend"
+	if direction == "client_to_backend" {
+		srcName = "client"
+	}
+
 	for {
 		messageType, message, err := src.ReadMessage()
 		if err != nil {
-			return err
+			return newWSRelayResult(direction, srcName, dst.name, "read", err)
 		}
 		if err := dst.WriteMessage(messageType, message); err != nil {
-			return err
+			return newWSRelayResult(direction, srcName, dst.name, "write", err)
 		}
+	}
+}
+
+func newWSRelayResult(direction, source, target, stage string, err error) wsRelayResult {
+	result := wsRelayResult{
+		Direction: direction,
+		Source:    source,
+		Target:    target,
+		Stage:     stage,
+		Err:       err,
+	}
+	var closeErr *websocket.CloseError
+	if errors.As(err, &closeErr) {
+		result.CloseErr = closeErr
+	}
+	return result
+}
+
+func logRelayResult(logger *slog.Logger, sessionID, message string, result wsRelayResult) {
+	if logger == nil {
+		return
+	}
+	attrs := []any{
+		"ws_session_id", sessionID,
+		"direction", result.Direction,
+		"source", result.Source,
+		"target", result.Target,
+		"stage", result.Stage,
+	}
+	if result.CloseErr != nil {
+		attrs = append(attrs, "close_code", result.CloseErr.Code, "close_text", result.CloseErr.Text)
+	}
+	if result.Err != nil {
+		attrs = append(attrs, "error", result.Err)
+	}
+	logger.Log(context.Background(), result.logLevel(), message, attrs...)
+}
+
+func handleRelayTermination(logger *slog.Logger, sessionID string, client, backend *safeWSConn, result wsRelayResult) {
+	switch result.Stage {
+	case "context":
+		propagateProxyClose(logger, sessionID, client, websocket.CloseGoingAway, "proxy_context_canceled", "context_cancel")
+		propagateProxyClose(logger, sessionID, backend, websocket.CloseGoingAway, "proxy_context_canceled", "context_cancel")
+		return
+	}
+
+	peer := peerConn(client, backend, result.notifyPeer())
+	if peer == nil {
+		if logger != nil {
+			logger.Warn("websocket relay peer resolution failed",
+				"ws_session_id", sessionID,
+				"source", result.Source,
+				"target", result.Target,
+				"stage", result.Stage,
+			)
+		}
+		return
+	}
+
+	if result.CloseErr != nil {
+		code := sanitizeCloseCode(result.CloseErr.Code, websocket.CloseNormalClosure)
+		propagateProxyClose(logger, sessionID, peer, code, result.CloseErr.Text, "propagate_peer_close")
+		return
+	}
+
+	code, text := proxyCloseForUnexpected(result)
+	propagateProxyClose(logger, sessionID, peer, code, text, "synthetic_close")
+}
+
+func peerConn(client, backend *safeWSConn, name string) *safeWSConn {
+	switch name {
+	case "client":
+		return client
+	case "backend":
+		return backend
+	default:
+		return nil
+	}
+}
+
+func sanitizeCloseCode(code, fallback int) int {
+	switch code {
+	case 0, websocket.CloseNoStatusReceived, websocket.CloseAbnormalClosure, websocket.CloseTLSHandshake:
+		return fallback
+	default:
+		return code
+	}
+}
+
+func proxyCloseForUnexpected(result wsRelayResult) (int, string) {
+	switch result.failureSide() {
+	case "backend":
+		if result.Stage == "read" {
+			return websocket.CloseInternalServerErr, "upstream_read_failed"
+		}
+		return websocket.CloseInternalServerErr, "upstream_write_failed"
+	case "client":
+		if result.Stage == "read" {
+			return websocket.CloseGoingAway, "client_read_failed"
+		}
+		return websocket.CloseGoingAway, "client_write_failed"
+	default:
+		return websocket.CloseInternalServerErr, "proxy_relay_failed"
+	}
+}
+
+func writeProxyClose(conn *safeWSConn, code int, text string) error {
+	if conn == nil {
+		return nil
+	}
+	deadline := time.Now().Add(wsProxyCloseWriteTimeout)
+	return conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(code, text), deadline)
+}
+
+func propagateProxyClose(logger *slog.Logger, sessionID string, conn *safeWSConn, code int, text, mode string) {
+	if conn == nil {
+		return
+	}
+	if logger != nil {
+		logger.Info("websocket proxy sending close",
+			"ws_session_id", sessionID,
+			"mode", mode,
+			"target", conn.name,
+			"close_code", code,
+			"close_text", text,
+		)
+	}
+	if err := writeProxyClose(conn, code, text); err != nil {
+		if logger != nil {
+			logger.Warn("websocket proxy close send failed",
+				"ws_session_id", sessionID,
+				"mode", mode,
+				"target", conn.name,
+				"close_code", code,
+				"close_text", text,
+				"error", err,
+			)
+		}
+		return
+	}
+	if logger != nil {
+		logger.Info("websocket proxy close sent",
+			"ws_session_id", sessionID,
+			"mode", mode,
+			"target", conn.name,
+			"close_code", code,
+			"close_text", text,
+		)
 	}
 }
