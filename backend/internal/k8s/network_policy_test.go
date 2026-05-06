@@ -2,6 +2,7 @@ package k8s
 
 import (
 	"context"
+	"reflect"
 	"testing"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -158,5 +159,25 @@ func TestDomainAllowlistPolicyWithEmptyDomains(t *testing.T) {
 	}
 	if !apierrors.IsNotFound(err) {
 		t.Fatalf("expected not found error, got %v", err)
+	}
+}
+
+func TestAllowInternetEgressPolicyExcludesExpectedCidrs(t *testing.T) {
+	manager := NewNetworkPolicyManager(&Client{})
+
+	policy := manager.allowInternetEgressPolicy()
+	if len(policy.Spec.Egress) == 0 || len(policy.Spec.Egress[0].To) == 0 || policy.Spec.Egress[0].To[0].IPBlock == nil {
+		t.Fatalf("allowInternetEgressPolicy() missing primary ipBlock rule")
+	}
+
+	got := policy.Spec.Egress[0].To[0].IPBlock.Except
+	want := []string{
+		"10.0.0.0/8",
+		"172.16.0.0/12",
+		"192.168.0.0/16",
+		"127.0.0.0/8",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("allowInternetEgressPolicy() except=%v want %v", got, want)
 	}
 }

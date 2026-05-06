@@ -472,7 +472,6 @@ spec:
     - 172.16.0.0/12
     - 192.168.0.0/16
     - 127.0.0.0/8
-    - 169.254.0.0/16
   egressGateways:
     # 每个 egress 节点一个条目，用 hostname 唯一选择节点
     - nodeSelector:
