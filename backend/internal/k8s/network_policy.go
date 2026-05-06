@@ -283,7 +283,6 @@ func (m *NetworkPolicyManager) allowInternetEgressPolicy() *networkingv1.Network
 									"172.16.0.0/12",  // Private network
 									"192.168.0.0/16", // Private network
 									"127.0.0.0/8",    // Loopback
-									"169.254.0.0/16", // Link-local
 								},
 							},
 						},
