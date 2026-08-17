@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log"
 	"log/slog"
 	"net/http"
@@ -23,6 +24,10 @@ import (
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 )
+
+type namespaceEnsurer interface {
+	EnsureNamespace(ctx context.Context) error
+}
 
 func main() {
 	mode := "server"
@@ -127,10 +132,9 @@ func runServer() {
 	}
 
 	ctx := context.Background()
-	if err := k8sClient.EnsureNamespace(ctx); err != nil {
+	if err := ensureSandboxNamespaceIfRequired(ctx, k8sClient, true); err != nil {
 		log.Fatalf("Failed to ensure namespace: %v", err)
 	}
-	slog.Info("sandbox namespace ensured", "component", "k8s", "namespace", k8sClient.SandboxNamespace())
 
 	// Ensure network policies are applied
 	netPolicyMgr := k8s.NewNetworkPolicyManager(k8sClient)
@@ -366,7 +370,7 @@ func runNetworkController() {
 	}
 
 	ctx := context.Background()
-	if err := k8sClient.EnsureNamespace(ctx); err != nil {
+	if err := ensureSandboxNamespaceIfRequired(ctx, k8sClient, false); err != nil {
 		log.Fatalf("Failed to ensure namespace: %v", err)
 	}
 
@@ -390,4 +394,19 @@ func runNetworkController() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 	log.Println("Shutting down network controller...")
+}
+
+func ensureSandboxNamespaceIfRequired(ctx context.Context, ensurer namespaceEnsurer, required bool) error {
+	if !required {
+		slog.Info("skipping sandbox namespace ensure", "component", "k8s")
+		return nil
+	}
+	if ensurer == nil {
+		return errors.New("namespace ensurer is nil")
+	}
+	if err := ensurer.EnsureNamespace(ctx); err != nil {
+		return err
+	}
+	slog.Info("sandbox namespace ensured", "component", "k8s")
+	return nil
 }
